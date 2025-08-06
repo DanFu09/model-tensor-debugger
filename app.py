@@ -116,8 +116,129 @@ def load_tensor_files(directory):
     
     return tensor_data
 
-def match_tensors(model1_data, model2_data):
-    """Match tensors between two models based on layer and stage order"""
+class TensorMatchingStrategy:
+    """Base class for tensor matching strategies"""
+    def find_matches(self, model1_data, model2_data):
+        raise NotImplementedError
+    
+    def get_strategy_name(self):
+        return self.__class__.__name__
+
+class LayerStageStrategy(TensorMatchingStrategy):
+    """Original layer+stage matching logic"""
+    def find_matches(self, model1_data, model2_data):
+        return self._match_by_layer_stage(model1_data, model2_data)
+    
+    def _match_by_layer_stage(self, model1_data, model2_data):
+        # This contains the existing match_tensors logic
+        return match_tensors_layer_stage(model1_data, model2_data)
+
+class ExactFilenameStrategy(TensorMatchingStrategy):
+    """Match tensors by exact filename"""
+    def find_matches(self, model1_data, model2_data):
+        matches = []
+        for file1, data1 in model1_data.items():
+            filename1 = Path(file1).name
+            for file2, data2 in model2_data.items():
+                filename2 = Path(file2).name
+                if filename1 == filename2:
+                    # Create match
+                    diff_stats = calculate_tensor_diff(data1['tensor'], data2['tensor'])
+                    match = create_tensor_match(file1, data1, file2, data2, diff_stats, 'filename')
+                    matches.append(match)
+                    break
+        return matches
+
+class SingleFileStrategy(TensorMatchingStrategy):
+    """Create pairwise comparisons within a single file"""
+    def find_matches(self, model1_data, model2_data=None):
+        # For single file mode, model2_data is ignored
+        matches = []
+        tensor_items = list(model1_data.items())
+        
+        for i, (name1, data1) in enumerate(tensor_items):
+            for j, (name2, data2) in enumerate(tensor_items[i+1:], i+1):
+                diff_stats = calculate_tensor_diff(data1['tensor'], data2['tensor'])
+                match = create_tensor_match(name1, data1, name2, data2, diff_stats, 'self_comparison')
+                match['match_index'] = len(matches)
+                matches.append(match)
+        
+        return matches
+
+class DualPthStrategy(TensorMatchingStrategy):
+    """Match tensors from two .pth files by tensor names"""
+    def find_matches(self, model1_data, model2_data):
+        matches = []
+        
+        print(f"DEBUG: model1_data keys: {list(model1_data.keys())}")
+        print(f"DEBUG: model2_data keys: {list(model2_data.keys())}")
+        
+        # Extract tensor names (after the file prefix)
+        model1_tensors = {}
+        model2_tensors = {}
+        
+        for key, data in model1_data.items():
+            if ':' in key:
+                tensor_name = key.split(':', 1)[1]  # Get part after 'file1:'
+            else:
+                # For single tensors, use generic name for comparison
+                tensor_name = 'tensor' if key.startswith('file') else key
+            model1_tensors[tensor_name] = (key, data)
+        
+        for key, data in model2_data.items():
+            if ':' in key:
+                tensor_name = key.split(':', 1)[1]  # Get part after 'file2:'
+            else:
+                # For single tensors, use generic name for comparison
+                tensor_name = 'tensor' if key.startswith('file') else key
+            model2_tensors[tensor_name] = (key, data)
+        
+        print(f"DEBUG: model1 tensor names: {list(model1_tensors.keys())}")
+        print(f"DEBUG: model2 tensor names: {list(model2_tensors.keys())}")
+        
+        # Match by tensor name
+        for tensor_name in model1_tensors:
+            if tensor_name in model2_tensors:
+                file1, data1 = model1_tensors[tensor_name]
+                file2, data2 = model2_tensors[tensor_name]
+                
+                print(f"DEBUG: Matching tensor '{tensor_name}': {file1} vs {file2}")
+                
+                # Calculate difference statistics
+                diff_stats = calculate_tensor_diff(data1['tensor'], data2['tensor'])
+                match = create_tensor_match(file1, data1, file2, data2, diff_stats, 'dual_pth')
+                match['match_index'] = len(matches)
+                
+                # Set layer info for dual .pth files (no actual layers, just direct comparison)
+                match['layer_num'] = 0
+                match['stage'] = tensor_name
+                match['stage_index'] = len(matches)
+                match['stage_display'] = tensor_name.replace('_', ' ').title()
+                
+                matches.append(match)
+        
+        print(f"DEBUG: Found {len(matches)} matches")
+        return matches
+
+def create_tensor_match(file1, data1, file2, data2, diff_stats, match_type='both'):
+    """Create a standardized tensor match object"""
+    return {
+        'model1_file': file1,
+        'model2_file': file2,
+        'layer_num': 0,  # Default, can be overridden
+        'stage': Path(file1).stem,  # Use filename as stage
+        'stage_index': 0,
+        'stage_display': Path(file1).stem.replace('_', ' ').title(),
+        'model1_data': {k: v for k, v in data1.items() if k != 'tensor'},
+        'model2_data': {k: v for k, v in data2.items() if k != 'tensor'},
+        'diff_stats': diff_stats,
+        'tensor1': data1['tensor'],
+        'tensor2': data2['tensor'],
+        'match_type': match_type
+    }
+
+def match_tensors_layer_stage(model1_data, model2_data):
+    """Original layer+stage matching logic - moved from match_tensors"""
     # Group files by layer and stage
     model1_grouped = {}
     model2_grouped = {}
@@ -300,6 +421,41 @@ def match_tensors(model1_data, model2_data):
     matches.sort(key=lambda x: (x['layer_num'], x['stage_index']))
     
     return matches
+
+def match_tensors(model1_data, model2_data, strategy='auto', upload_mode='dual_archive'):
+    """Generalized tensor matching with multiple strategies"""
+    
+    # Handle single file mode
+    if upload_mode == 'single_file':
+        single_strategy = SingleFileStrategy()
+        return single_strategy.find_matches(model1_data)
+    
+    # Handle dual .pth file mode
+    if upload_mode == 'dual_pth':
+        strategies = [DualPthStrategy()]  # Use specialized dual .pth matching
+    else:
+        # For dual archive mode, try multiple strategies
+        strategies = []
+        
+        if strategy == 'auto' or strategy == 'layer_stage':
+            strategies.append(LayerStageStrategy())
+        if strategy == 'auto' or strategy == 'filename':
+            strategies.append(ExactFilenameStrategy())
+    
+    # Try each strategy until we get matches
+    for matching_strategy in strategies:
+        try:
+            matches = matching_strategy.find_matches(model1_data, model2_data)
+            if matches:
+                print(f"Successfully matched {len(matches)} tensor pairs using {matching_strategy.get_strategy_name()}")
+                return matches
+        except Exception as e:
+            print(f"Strategy {matching_strategy.get_strategy_name()} failed: {e}")
+            continue
+    
+    # If no strategy worked, return empty matches
+    print("No matching strategy succeeded")
+    return []
 
 def can_reshape_tensors(shape1, shape2):
     """Check if tensors can be reshaped to match for different TP settings"""
@@ -575,13 +731,282 @@ def calculate_tensor_diff(tensor1, tensor2):
 def index():
     return render_template('index.html')
 
+def detect_upload_mode(files, form_data):
+    """Detect upload mode based on provided files"""
+    if 'upload_mode' in form_data:
+        return form_data['upload_mode']
+    
+    # Auto-detect based on files present
+    if 'single_file' in files:
+        return 'single_file'
+    elif 'model1' in files and 'model2' in files:
+        # Check if files are .pth files for direct comparison
+        model1_name = files['model1'].filename.lower()
+        model2_name = files['model2'].filename.lower()
+        
+        if (model1_name.endswith(('.pth', '.pt')) and 
+            model2_name.endswith(('.pth', '.pt'))):
+            return 'dual_pth'
+        else:
+            return 'dual_archive'
+    else:
+        return 'unknown'
+
+def handle_single_file_upload(files):
+    """Handle upload of single .pth file for self-comparison"""
+    single_file = files['single_file']
+    
+    if single_file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    try:
+        # Create temporary directory
+        temp_dir = tempfile.mkdtemp()
+        file_path = os.path.join(temp_dir, single_file.filename)
+        single_file.save(file_path)
+        
+        # Load the tensor file directly
+        print(f"Loading single file: {single_file.filename}")
+        tensor_data = {}
+        
+        try:
+            # Try multiple loading strategies for compatibility
+            data = None
+            try:
+                data = torch.load(file_path, map_location='cpu')
+            except Exception as e1:
+                print(f"  Normal loading failed: {e1}")
+                try:
+                    data = torch.load(file_path, map_location='cpu', weights_only=True)
+                    print("  Loaded with weights_only=True")
+                except Exception as e2:
+                    return jsonify({'error': f'Failed to load tensor file with both loading methods. Normal: {str(e1)}, weights_only: {str(e2)}'}), 400
+            
+            if data is None:
+                return jsonify({'error': 'Failed to load tensor data from file'}), 400
+                
+            if isinstance(data, dict):
+                # File contains multiple tensors as dictionary
+                if len(data) == 0:
+                    return jsonify({'error': 'Tensor file contains empty dictionary'}), 400
+                for key, tensor in data.items():
+                    tensor_data[key] = process_single_tensor(tensor, key)
+            elif isinstance(data, (list, tuple)):
+                # File contains list/tuple of tensors
+                if len(data) == 0:
+                    return jsonify({'error': 'Tensor file contains empty list/tuple'}), 400
+                for i, tensor in enumerate(data):
+                    tensor_data[f'tensor_{i}'] = process_single_tensor(tensor, f'tensor_{i}')
+            else:
+                # File contains single tensor
+                tensor_data['tensor_0'] = process_single_tensor(data, 'single_tensor')
+                
+        except Exception as e:
+            return jsonify({'error': f'Failed to process tensor file: {str(e)}'}), 400
+        
+        # Create self-comparison matches
+        matches = match_tensors(tensor_data, None, strategy='auto', upload_mode='single_file')
+        
+        # Clean up
+        shutil.rmtree(temp_dir)
+        
+        return jsonify({
+            'model1_files': len(tensor_data),
+            'model2_files': len(tensor_data), 
+            'matches': [serialize_match_for_response(match) for match in matches],
+            'upload_mode': 'single_file'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def sanitize_for_json(tensor_values):
+    """Convert tensor values to JSON-safe format, handling NaN and Inf"""
+    if tensor_values is None:
+        return None
+    
+    def clean_value(val):
+        if isinstance(val, (list, tuple)):
+            return [clean_value(v) for v in val]
+        elif isinstance(val, float):
+            if val != val:  # NaN check
+                return 0.0
+            elif val == float('inf'):
+                return 1e10  # Large but finite number
+            elif val == float('-inf'):
+                return -1e10
+            else:
+                return val
+        else:
+            return val
+    
+    return clean_value(tensor_values)
+
+def process_single_tensor(tensor, name):
+    """Process a single tensor into the expected format"""
+    # Handle mock tensor data structure (for testing without PyTorch)
+    if isinstance(tensor, dict) and 'data' in tensor and 'shape' in tensor:
+        # Convert mock tensor to actual tensor
+        data = tensor['data']
+        shape = tensor['shape']
+        if isinstance(data, list):
+            tensor = torch.tensor(data, dtype=torch.float32).reshape(shape)
+    
+    # Convert Python lists to tensors first
+    elif isinstance(tensor, list):
+        tensor = torch.tensor(tensor, dtype=torch.float32)
+    
+    # Ensure tensor is on CPU
+    if hasattr(tensor, 'cpu'):
+        tensor = tensor.cpu()
+    
+    # Handle scalars (but not lists which were converted above)
+    if not hasattr(tensor, 'shape'):
+        return {
+            'tensor': tensor,
+            'shape': [],
+            'dtype': str(type(tensor)),
+            'mean': float(tensor),
+            'std': 0.0,
+            'min': float(tensor),
+            'max': float(tensor),
+        }
+    
+    # Handle regular tensors
+    if tensor.numel() > 0:
+        mean_val = tensor.mean().item()
+        std_val = tensor.std().item()
+        min_val = tensor.min().item()
+        max_val = tensor.max().item()
+        
+        # Replace NaN/Inf values with safe defaults
+        mean_val = 0.0 if not torch.isfinite(torch.tensor(mean_val)) else mean_val
+        std_val = 0.0 if not torch.isfinite(torch.tensor(std_val)) else std_val
+        min_val = 0.0 if not torch.isfinite(torch.tensor(min_val)) else min_val
+        max_val = 0.0 if not torch.isfinite(torch.tensor(max_val)) else max_val
+    else:
+        mean_val = std_val = min_val = max_val = 0.0
+    
+    return {
+        'tensor': tensor,
+        'shape': list(tensor.shape),
+        'dtype': str(tensor.dtype),
+        'mean': float(mean_val),
+        'std': float(std_val),
+        'min': float(min_val),
+        'max': float(max_val),
+    }
+
+def serialize_match_for_response(match):
+    """Remove tensors from match for JSON response"""
+    match_copy = match.copy()
+    match_copy.pop('tensor1', None)
+    match_copy.pop('tensor2', None)
+    return match_copy
+
 @app.route('/upload', methods=['POST'])
 def upload_files():
-    if 'model1' not in request.files or 'model2' not in request.files:
+    upload_mode = detect_upload_mode(request.files, request.form)
+    
+    if upload_mode == 'single_file':
+        return handle_single_file_upload(request.files)
+    elif upload_mode == 'dual_archive':
+        return handle_dual_archive_upload(request.files)
+    elif upload_mode == 'dual_pth':
+        return handle_dual_pth_upload(request.files)
+    else:
+        return jsonify({'error': 'Invalid upload mode or missing files'}), 400
+
+def handle_dual_pth_upload(files):
+    """Handle direct comparison of two .pth files"""
+    if 'model1' not in files or 'model2' not in files:
+        return jsonify({'error': 'Both tensor files required'}), 400
+    
+    model1_file = files['model1']
+    model2_file = files['model2']
+    
+    if model1_file.filename == '' or model2_file.filename == '':
+        return jsonify({'error': 'No files selected'}), 400
+    
+    try:
+        # Create temporary directory
+        temp_dir = tempfile.mkdtemp()
+        
+        # Save files
+        model1_path = os.path.join(temp_dir, model1_file.filename)
+        model2_path = os.path.join(temp_dir, model2_file.filename)
+        
+        model1_file.save(model1_path)
+        model2_file.save(model2_path)
+        
+        print(f"Loading tensor files: {model1_file.filename} and {model2_file.filename}")
+        
+        # Load tensor data directly (not from archives)
+        model1_data = {}
+        model2_data = {}
+        
+        # Load first file
+        try:
+            data1 = torch.load(model1_path, map_location='cpu')
+            if isinstance(data1, dict):
+                for key, tensor in data1.items():
+                    model1_data[f"file1:{key}"] = process_single_tensor(tensor, key)
+            else:
+                model1_data["file1"] = process_single_tensor(data1, 'tensor')
+        except Exception as e:
+            return jsonify({'error': f'Failed to load File 1: {str(e)}'}), 400
+        
+        # Load second file  
+        try:
+            data2 = torch.load(model2_path, map_location='cpu')
+            if isinstance(data2, dict):
+                for key, tensor in data2.items():
+                    model2_data[f"file2:{key}"] = process_single_tensor(tensor, key)
+            else:
+                model2_data["file2"] = process_single_tensor(data2, 'tensor')
+        except Exception as e:
+            return jsonify({'error': f'Failed to load File 2: {str(e)}'}), 400
+        
+        # Match tensors using dual .pth strategy
+        matches = match_tensors(model1_data, model2_data, strategy='dual_pth', upload_mode='dual_pth')
+        
+        print(f"DEBUG: dual_pth matches found: {len(matches)}")
+        for i, match in enumerate(matches):
+            print(f"  Match {i}: {match.get('model1_file', 'N/A')} vs {match.get('model2_file', 'N/A')}")
+        
+        # Store matches globally for tensor inspection
+        global stored_matches
+        stored_matches = store_matches_for_inspection(matches)
+        
+        print(f"DEBUG: stored_matches for dual_pth: {len(stored_matches)} matches")
+        for i, stored_match in enumerate(stored_matches):
+            print(f"  Match {i}: tensor1 shape: {stored_match.get('tensor1', 'None')}")
+            print(f"  Match {i}: tensor2 shape: {stored_match.get('tensor2', 'None')}")
+            if hasattr(stored_match.get('tensor1'), 'shape'):
+                print(f"  Match {i}: tensor1 actual shape: {stored_match['tensor1'].shape}")
+            if hasattr(stored_match.get('tensor2'), 'shape'):
+                print(f"  Match {i}: tensor2 actual shape: {stored_match['tensor2'].shape}")
+        
+        # Clean up
+        shutil.rmtree(temp_dir)
+        
+        return jsonify({
+            'model1_files': len(model1_data),
+            'model2_files': len(model2_data),
+            'matches': [serialize_match_for_response(match) for match in matches],
+            'upload_mode': 'dual_pth'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def handle_dual_archive_upload(files):
+    """Handle the original dual archive upload mode"""
+    if 'model1' not in files or 'model2' not in files:
         return jsonify({'error': 'Both model files required'}), 400
     
-    model1_file = request.files['model1']
-    model2_file = request.files['model2']
+    model1_file = files['model1']
+    model2_file = files['model2']
     
     if model1_file.filename == '' or model2_file.filename == '':
         return jsonify({'error': 'No files selected'}), 400
@@ -608,119 +1033,12 @@ def upload_files():
         model1_data = load_tensor_files(model1_dir)
         model2_data = load_tensor_files(model2_dir)
         
-        # Match tensors
-        matches = match_tensors(model1_data, model2_data)
+        # Match tensors using generalized matching system
+        matches = match_tensors(model1_data, model2_data, strategy='auto', upload_mode='dual_archive')
         
         # Store matches globally for tensor inspection with both original and reshaped tensors
         global stored_matches
-        stored_matches = []
-        
-        for match in matches:
-            # Create a stored match with both original and potentially reshaped tensors
-            stored_match = match.copy()
-            
-            if match['tensor1'] is not None and match['tensor2'] is not None:
-                # Both tensors available - check if reshaping is needed
-                tensor1 = match['tensor1'].cpu() if hasattr(match['tensor1'], 'cpu') else match['tensor1']
-                tensor2 = match['tensor2'].cpu() if hasattr(match['tensor2'], 'cpu') else match['tensor2']
-                
-                # Handle scalar values - they don't have shapes
-                has_shape1 = hasattr(tensor1, 'shape')
-                has_shape2 = hasattr(tensor2, 'shape')
-                
-                if not has_shape1 or not has_shape2:
-                    # At least one is a scalar - no reshaping needed
-                    original_shape1 = list(tensor1.shape) if has_shape1 else []
-                    original_shape2 = list(tensor2.shape) if has_shape2 else []
-                    
-                    stored_match.update({
-                        'original_tensor1': tensor1,
-                        'original_tensor2': tensor2,
-                        'tensor1': tensor1,
-                        'tensor2': tensor2,
-                        'reshape_applied': False,
-                        'original_shapes': [original_shape1, original_shape2],
-                        'final_shape': original_shape1 if has_shape1 else original_shape2
-                    })
-                else:
-                    # Both have shapes - proceed with normal tensor processing
-                    original_shape1 = list(tensor1.shape)
-                    original_shape2 = list(tensor2.shape)
-                
-                    if tensor1.shape != tensor2.shape:
-                        try:
-                            # Apply TP-aware reshaping during upload phase
-                            reshaped_tensor1, reshaped_tensor2 = smart_reshape_for_tp(tensor1, tensor2)
-                            print(f"  Stored reshaped tensors for {match['model1_file']} and {match['model2_file']}")
-                            print(f"  Original shapes: {original_shape1} vs {original_shape2} → Final: {list(reshaped_tensor1.shape)}")
-                            
-                            stored_match.update({
-                                'original_tensor1': tensor1,
-                                'original_tensor2': tensor2,
-                                'tensor1': reshaped_tensor1,  # Use reshaped versions for slicing
-                                'tensor2': reshaped_tensor2,
-                                'reshape_applied': True,
-                                'original_shapes': [original_shape1, original_shape2],
-                                'final_shape': list(reshaped_tensor1.shape)
-                            })
-                        except Exception as e:
-                            print(f"  Could not reshape tensors during upload for {match['model1_file']}: {e}")
-                            stored_match.update({
-                                'original_tensor1': tensor1,
-                                'original_tensor2': tensor2,
-                                'tensor1': tensor1,
-                                'tensor2': tensor2,
-                                'reshape_applied': False,
-                                'original_shapes': [original_shape1, original_shape2],
-                                'final_shape': None
-                            })
-                    else:
-                        # Shapes already match - no reshaping needed
-                        stored_match.update({
-                            'original_tensor1': tensor1,
-                            'original_tensor2': tensor2,
-                            'tensor1': tensor1,
-                            'tensor2': tensor2,
-                            'reshape_applied': False,
-                            'original_shapes': [original_shape1, original_shape2],
-                            'final_shape': list(tensor1.shape)
-                        })
-            else:
-                # Only one tensor available - no reshaping needed
-                if match['tensor1'] is not None:
-                    tensor1 = match['tensor1'].cpu() if hasattr(match['tensor1'], 'cpu') else match['tensor1']
-                    shape1 = list(tensor1.shape) if hasattr(tensor1, 'shape') else []
-                    stored_match.update({
-                        'original_tensor1': tensor1,
-                        'original_tensor2': None,
-                        'tensor1': tensor1,
-                        'tensor2': None,
-                        'reshape_applied': False,
-                        'original_shapes': [shape1, None],
-                        'final_shape': shape1
-                    })
-                elif match['tensor2'] is not None:
-                    tensor2 = match['tensor2'].cpu() if hasattr(match['tensor2'], 'cpu') else match['tensor2']
-                    shape2 = list(tensor2.shape) if hasattr(tensor2, 'shape') else []
-                    stored_match.update({
-                        'original_tensor1': None,
-                        'original_tensor2': tensor2,
-                        'tensor1': None,
-                        'tensor2': tensor2,
-                        'reshape_applied': False,
-                        'original_shapes': [None, shape2],
-                        'final_shape': shape2
-                    })
-            
-            stored_matches.append(stored_match)
-        
-        # Remove tensors from response for performance
-        matches_for_response = []
-        for match in matches:
-            match_copy = match.copy()
-            match_copy.pop('tensor1', None)
-            match_copy.pop('tensor2', None)
-            matches_for_response.append(match_copy)
+        stored_matches = store_matches_for_inspection(matches)
         
         # Clean up
         shutil.rmtree(temp_dir)
@@ -728,11 +1046,117 @@ def upload_files():
         return jsonify({
             'model1_files': len(model1_data),
             'model2_files': len(model2_data),
-            'matches': matches_for_response
+            'matches': [serialize_match_for_response(match) for match in matches],
+            'upload_mode': 'dual_archive'
         })
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+def store_matches_for_inspection(matches):
+    """Store matches with original and reshaped tensors for inspection"""
+    stored = []
+    
+    for match in matches:
+        # Create a stored match with both original and potentially reshaped tensors
+        stored_match = match.copy()
+        
+        if match['tensor1'] is not None and match['tensor2'] is not None:
+            # Both tensors available - check if reshaping is needed
+            tensor1 = match['tensor1'].cpu() if hasattr(match['tensor1'], 'cpu') else match['tensor1']
+            tensor2 = match['tensor2'].cpu() if hasattr(match['tensor2'], 'cpu') else match['tensor2']
+            
+            # Handle scalar values - they don't have shapes
+            has_shape1 = hasattr(tensor1, 'shape')
+            has_shape2 = hasattr(tensor2, 'shape')
+            
+            if not has_shape1 or not has_shape2:
+                # At least one is a scalar - no reshaping needed
+                original_shape1 = list(tensor1.shape) if has_shape1 else []
+                original_shape2 = list(tensor2.shape) if has_shape2 else []
+                
+                stored_match.update({
+                    'original_tensor1': tensor1,
+                    'original_tensor2': tensor2,
+                    'tensor1': tensor1,
+                    'tensor2': tensor2,
+                    'reshape_applied': False,
+                    'original_shapes': [original_shape1, original_shape2],
+                    'final_shape': original_shape1 if has_shape1 else original_shape2
+                })
+            else:
+                # Both have shapes - proceed with normal tensor processing
+                original_shape1 = list(tensor1.shape)
+                original_shape2 = list(tensor2.shape)
+            
+                if tensor1.shape != tensor2.shape:
+                    try:
+                        # Apply TP-aware reshaping during upload phase
+                        reshaped_tensor1, reshaped_tensor2 = smart_reshape_for_tp(tensor1, tensor2)
+                        print(f"  Stored reshaped tensors for {match['model1_file']} and {match['model2_file']}")
+                        print(f"  Original shapes: {original_shape1} vs {original_shape2} → Final: {list(reshaped_tensor1.shape)}")
+                        
+                        stored_match.update({
+                            'original_tensor1': tensor1,
+                            'original_tensor2': tensor2,
+                            'tensor1': reshaped_tensor1,  # Use reshaped versions for slicing
+                            'tensor2': reshaped_tensor2,
+                            'reshape_applied': True,
+                            'original_shapes': [original_shape1, original_shape2],
+                            'final_shape': list(reshaped_tensor1.shape)
+                        })
+                    except Exception as e:
+                        print(f"  Could not reshape tensors during upload for {match['model1_file']}: {e}")
+                        stored_match.update({
+                            'original_tensor1': tensor1,
+                            'original_tensor2': tensor2,
+                            'tensor1': tensor1,
+                            'tensor2': tensor2,
+                            'reshape_applied': False,
+                            'original_shapes': [original_shape1, original_shape2],
+                            'final_shape': None
+                        })
+                else:
+                    # Shapes already match - no reshaping needed
+                    stored_match.update({
+                        'original_tensor1': tensor1,
+                        'original_tensor2': tensor2,
+                        'tensor1': tensor1,
+                        'tensor2': tensor2,
+                        'reshape_applied': False,
+                        'original_shapes': [original_shape1, original_shape2],
+                        'final_shape': list(tensor1.shape)
+                    })
+        else:
+            # Only one tensor available - no reshaping needed
+            if match['tensor1'] is not None:
+                tensor1 = match['tensor1'].cpu() if hasattr(match['tensor1'], 'cpu') else match['tensor1']
+                shape1 = list(tensor1.shape) if hasattr(tensor1, 'shape') else []
+                stored_match.update({
+                    'original_tensor1': tensor1,
+                    'original_tensor2': None,
+                    'tensor1': tensor1,
+                    'tensor2': None,
+                    'reshape_applied': False,
+                    'original_shapes': [shape1, None],
+                    'final_shape': shape1
+                })
+            elif match['tensor2'] is not None:
+                tensor2 = match['tensor2'].cpu() if hasattr(match['tensor2'], 'cpu') else match['tensor2']
+                shape2 = list(tensor2.shape) if hasattr(tensor2, 'shape') else []
+                stored_match.update({
+                    'original_tensor1': None,
+                    'original_tensor2': tensor2,
+                    'tensor1': None,
+                    'tensor2': tensor2,
+                    'reshape_applied': False,
+                    'original_shapes': [None, shape2],
+                    'final_shape': shape2
+                })
+            
+        stored.append(stored_match)
+    
+    return stored
 
 
 # Global storage for tensor data (in production, use proper session management)
@@ -829,8 +1253,8 @@ def get_tensor_values():
             start_idx = max(0, dim_idx)
             end_idx = min(start_idx + count, primary_tensor.shape[0])
             
-            values1 = tensor1[start_idx:end_idx].tolist() if has_tensor1 else None
-            values2 = tensor2[start_idx:end_idx].tolist() if has_tensor2 else None
+            values1 = sanitize_for_json(tensor1[start_idx:end_idx].tolist()) if has_tensor1 else None
+            values2 = sanitize_for_json(tensor2[start_idx:end_idx].tolist()) if has_tensor2 else None
             
             return jsonify({
                 'tensor1_values': values1,
@@ -881,8 +1305,8 @@ def get_tensor_values():
                 sliced2 = tensor2[slice_tuple] if has_tensor2 else None
                 
                 # Convert to list format
-                values1 = sliced1.tolist() if has_tensor1 and sliced1 is not None else None
-                values2 = sliced2.tolist() if has_tensor2 and sliced2 is not None else None
+                values1 = sanitize_for_json(sliced1.tolist()) if has_tensor1 and sliced1 is not None else None
+                values2 = sanitize_for_json(sliced2.tolist()) if has_tensor2 and sliced2 is not None else None
                 
                 # Handle the case where we get a single value vs a list
                 if isinstance(values1, (int, float)):
@@ -912,8 +1336,8 @@ def get_tensor_values():
                 start_idx = 0
                 end_idx = min(count, flat1.shape[0] if flat1 is not None else flat2.shape[0])
                 
-                values1 = flat1[start_idx:end_idx].tolist() if flat1 is not None else None
-                values2 = flat2[start_idx:end_idx].tolist() if flat2 is not None else None
+                values1 = sanitize_for_json(flat1[start_idx:end_idx].tolist()) if flat1 is not None else None
+                values2 = sanitize_for_json(flat2[start_idx:end_idx].tolist()) if flat2 is not None else None
                 
                 return jsonify({
                     'tensor1_values': values1,
@@ -998,7 +1422,7 @@ def get_tensor_values_manual():
             if hasattr(tensor1, 'shape') and len(tensor1.shape) > 0:
                 # Apply manual slicing to tensor 1
                 sliced_tensor1, slice_info1 = slice_tensor_manually(tensor1, tensor1_indices, count)
-                result['tensor1_values'] = sliced_tensor1.tolist()
+                result['tensor1_values'] = sanitize_for_json(sliced_tensor1.tolist())
                 result['tensor1_slice_info'] = slice_info1
             else:
                 # Scalar tensor
@@ -1011,7 +1435,7 @@ def get_tensor_values_manual():
             if hasattr(tensor2, 'shape') and len(tensor2.shape) > 0:
                 # Apply manual slicing to tensor 2
                 sliced_tensor2, slice_info2 = slice_tensor_manually(tensor2, tensor2_indices, count)
-                result['tensor2_values'] = sliced_tensor2.tolist()
+                result['tensor2_values'] = sanitize_for_json(sliced_tensor2.tolist())
                 result['tensor2_slice_info'] = slice_info2
             else:
                 # Scalar tensor
@@ -1146,6 +1570,60 @@ def slice_tensor_manually(tensor, indices, count):
     slice_info = ' × '.join(slice_parts)
     
     return sliced_tensor, slice_info
+
+@app.route('/reorder_matches', methods=['POST'])
+def reorder_matches():
+    """Update the order of matches based on client-side reordering"""
+    data = request.json
+    old_index = data.get('old_index')
+    new_index = data.get('new_index')
+    
+    if old_index is None or new_index is None:
+        return jsonify({'error': 'old_index and new_index are required'}), 400
+    
+    global stored_matches
+    
+    if old_index < 0 or old_index >= len(stored_matches) or new_index < 0 or new_index >= len(stored_matches):
+        return jsonify({'error': 'Invalid indices'}), 400
+    
+    try:
+        # Reorder the stored matches
+        item = stored_matches.pop(old_index)
+        stored_matches.insert(new_index, item)
+        
+        # Update match indices to reflect new order
+        for i, match in enumerate(stored_matches):
+            if 'match_index' in match:
+                match['match_index'] = i
+        
+        return jsonify({
+            'success': True,
+            'message': f'Moved match from position {old_index} to {new_index}',
+            'new_order': [match.get('stage', f'Match {i}') for i, match in enumerate(stored_matches)]
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Error reordering matches: {str(e)}'}), 500
+
+@app.route('/regroup_matches', methods=['POST']) 
+def regroup_matches():
+    """Regroup matches based on specified strategy"""
+    data = request.json
+    group_by = data.get('group_by', 'layer')
+    
+    global stored_matches
+    
+    try:
+        # This endpoint can be used for server-side regrouping if needed
+        # For now, we'll just acknowledge the request since regrouping is handled client-side
+        return jsonify({
+            'success': True,
+            'message': f'Regrouped by {group_by}',
+            'group_by': group_by
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Error regrouping matches: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='127.0.0.1', port=5000)

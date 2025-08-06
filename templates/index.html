@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ML Model Tensor Debugger</title>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -32,6 +33,11 @@
             grid-template-columns: 1fr 1fr;
             gap: 20px;
             margin-bottom: 30px;
+        }
+        
+        .upload-section.single-file {
+            grid-template-columns: 1fr;
+            justify-items: center;
         }
         
         .drop-zone {
@@ -554,27 +560,216 @@
             text-align: center;
             color: #ffd700;
         }
+        
+        /* Upload Mode Selector Styles */
+        .upload-mode-selector {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .mode-tabs {
+            display: inline-flex;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .mode-tab {
+            background: none;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: #6c757d;
+            transition: all 0.2s ease;
+            margin: 0 2px;
+        }
+        
+        .mode-tab:hover {
+            background-color: #e9ecef;
+            color: #495057;
+        }
+        
+        .mode-tab.active {
+            background-color: #007bff;
+            color: white;
+            box-shadow: 0 2px 4px rgba(0, 123, 255, 0.3);
+        }
+        
+        .single-file-zone {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        
+        .upload-description {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #6c757d;
+        }
+        
+        .upload-description em {
+            color: #007bff;
+        }
+        
+        /* Results Controls */
+        .results-controls {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .control-row {
+            display: flex;
+            gap: 30px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+        
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .control-group label {
+            font-weight: 600;
+            color: #495057;
+            min-width: 70px;
+        }
+        
+        .control-group select {
+            padding: 6px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background: white;
+            min-width: 150px;
+        }
+        
+        .control-group input[type="checkbox"] {
+            margin: 0 5px 0 15px;
+        }
+        
+        .drag-info {
+            color: #6c757d;
+            font-size: 14px;
+            text-align: center;
+            padding: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+        }
+        
+        /* Drag handle for matches */
+        .drag-handle {
+            cursor: grab;
+            color: #6c757d;
+            font-size: 16px;
+            padding: 5px;
+            margin-right: 10px;
+            user-select: none;
+        }
+        
+        .drag-handle:hover {
+            color: #495057;
+        }
+        
+        .drag-handle:active {
+            cursor: grabbing;
+        }
+        
+        /* Make match items draggable */
+        .match-item {
+            transition: transform 0.2s ease;
+        }
+        
+        .match-item:hover .drag-handle {
+            color: #007bff;
+        }
+        
+        .sortable-ghost {
+            opacity: 0.5;
+            background: #e3f2fd;
+        }
+        
+        .sortable-chosen {
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .view-values-btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+        
+        .view-values-btn:hover {
+            background-color: #0056b3;
+        }
+        
+        .inspect-btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        
+        .inspect-btn:hover {
+            opacity: 0.9;
+        }
+        
+        .upload-instructions {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .upload-instructions p {
+            margin: 5px 0;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>ML Model Tensor Debugger</h1>
         
+        <!-- Smart Upload Instructions -->
+        <div class="upload-instructions">
+            <p><strong>Two upload modes (auto-detected):</strong></p>
+            <p>📦 <em>Archives (.zip, .tar.gz)</em> → Compare two model archives</p>
+            <p>📄 <em>Tensor files (.pth, .pt)</em> → Compare two tensor files directly</p>
+        </div>
+        
+        <!-- Two-Box Upload Interface -->
         <div class="upload-section">
-            <div class="drop-zone" id="model1-drop">
-                <input type="file" id="model1-file" accept=".zip,.tar.gz,.tgz">
-                <div class="drop-zone-text">Drop Model 1 archive here</div>
-                <div class="file-info" id="model1-info"></div>
+            <div class="drop-zone" id="file1-drop">
+                <input type="file" id="file1" accept=".zip,.tar.gz,.tgz,.pth,.pt">
+                <div class="drop-zone-text">Drop File 1 here</div>
+                <div class="file-info" id="file1-info"></div>
             </div>
-            
-            <div class="drop-zone" id="model2-drop">
-                <input type="file" id="model2-file" accept=".zip,.tar.gz,.tgz">
-                <div class="drop-zone-text">Drop Model 2 archive here</div>
-                <div class="file-info" id="model2-info"></div>
+            <div class="drop-zone" id="file2-drop">
+                <input type="file" id="file2" accept=".zip,.tar.gz,.tgz,.pth,.pt">
+                <div class="drop-zone-text">Drop File 2 here</div>
+                <div class="file-info" id="file2-info"></div>
             </div>
         </div>
         
-        <button class="upload-btn" id="upload-btn" disabled>Compare Models</button>
+        <button class="upload-btn" id="upload-btn" disabled>Process Files</button>
         
         <div class="progress" id="progress">
             <div class="progress-bar" id="progress-bar"></div>
@@ -589,6 +784,42 @@
                 </div>
             </div>
             <div class="summary" id="summary"></div>
+            
+            <!-- Results Controls for reordering, grouping, and filtering -->
+            <div class="results-controls" id="results-controls" style="display: none;">
+                <div class="control-row">
+                    <div class="control-group">
+                        <label>Group by:</label>
+                        <select id="group-by" onchange="regroupMatches()">
+                            <option value="layer">Layer (default)</option>
+                            <option value="name">Filename</option>
+                            <option value="similarity">Similarity</option>
+                            <option value="none">No grouping</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-group">
+                        <label>Sort by:</label>
+                        <select id="sort-by" onchange="resortMatches()">
+                            <option value="layer_stage">Layer + Stage</option>
+                            <option value="name">Alphabetical</option>
+                            <option value="similarity">Best Match First</option>
+                            <option value="difference">Largest Diff First</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-group">
+                        <label>Show:</label>
+                        <input type="checkbox" id="show-identical" checked onchange="filterMatches()"> Identical
+                        <input type="checkbox" id="show-different" checked onchange="filterMatches()"> Different  
+                        <input type="checkbox" id="show-errors" checked onchange="filterMatches()"> Errors
+                    </div>
+                </div>
+                <div class="drag-info">
+                    💡 <em>Drag matches by the ⋮⋮ handle to reorder manually</em>
+                </div>
+            </div>
+            
             <div style="text-align: center; margin: 20px 0; display: none;" id="control-buttons">
                 <button class="upload-btn" onclick="collapseAll()" style="background-color: #6c757d;">
                     📉 Collapse All
@@ -602,8 +833,9 @@
     </div>
 
     <script>
-        let model1File = null;
-        let model2File = null;
+        let file1 = null;
+        let file2 = null;
+        let detectedMode = null;
         
         // Setup drag and drop
         function setupDropZone(dropZoneId, fileInputId, infoId) {
@@ -627,8 +859,9 @@
                 dropZone.classList.remove('dragover');
                 const files = e.dataTransfer.files;
                 if (files.length > 0) {
-                    fileInput.files = files;
-                    handleFileSelect(fileInput, dropZone, fileInfo);
+                    const file = files[0];
+                    // Directly call the new logic
+                    handleFileSelectNew(file, dropZoneId, fileInput, fileInfo);
                 }
             });
             
@@ -640,17 +873,39 @@
         function handleFileSelect(fileInput, dropZone, fileInfo) {
             const file = fileInput.files[0];
             if (file) {
-                dropZone.classList.add('file-loaded');
-                fileInfo.textContent = `${file.name} (${formatFileSize(file.size)})`;
-                
-                if (fileInput.id === 'model1-file') {
-                    model1File = file;
-                } else {
-                    model2File = file;
-                }
-                
-                updateUploadButton();
+                // Call the new handleFileSelect logic
+                handleFileSelectNew(file, dropZone.id, fileInput, fileInfo);
             }
+        }
+        
+        function handleFileSelectNew(file, dropZoneId, fileInput, fileInfo) {
+            // Store the file
+            if (dropZoneId === 'file1-drop') {
+                file1 = file;
+            } else if (dropZoneId === 'file2-drop') {
+                file2 = file;
+            }
+            
+            // Update UI
+            const dropZone = document.getElementById(dropZoneId);
+            dropZone.classList.add('file-loaded');
+            
+            // Detect file type and show appropriate info
+            const isArchive = file.name.match(/\.(zip|tar\.gz|tgz)$/i);
+            const isPth = file.name.match(/\.(pth|pt)$/i);
+            
+            let fileTypeIcon = '';
+            if (isArchive) {
+                fileTypeIcon = '📦 ';
+            } else if (isPth) {
+                fileTypeIcon = '📄 ';
+            }
+            
+            fileInfo.innerHTML = `${fileTypeIcon}<strong>${file.name}</strong><br>Size: ${formatFileSize(file.size)}`;
+            
+            // Update detected mode and button
+            updateDetectedMode();
+            updateUploadButton();
         }
         
         function formatFileSize(bytes) {
@@ -661,10 +916,6 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
         
-        function updateUploadButton() {
-            const uploadBtn = document.getElementById('upload-btn');
-            uploadBtn.disabled = !(model1File && model2File);
-        }
         
         function showProgress() {
             document.getElementById('progress').style.display = 'block';
@@ -728,32 +979,201 @@
             globalMatches = data.matches;
             
             // Update floating header with model names
-            const model1Name = model1File ? model1File.name : 'Model 1';
-            const model2Name = model2File ? model2File.name : 'Model 2';
+            let model1Name, model2Name;
+            if (data.upload_mode === 'single_file') {
+                model1Name = 'Single File';
+                model2Name = 'Self-Comparison';
+            } else if (data.upload_mode === 'dual_pth') {
+                model1Name = 'File 1';
+                model2Name = 'File 2';
+            } else {
+                model1Name = file1 ? file1.name : 'Model 1';
+                model2Name = file2 ? file2.name : 'Model 2';
+            }
             floatingModel1.textContent = model1Name;
             floatingModel2.textContent = model2Name;
             floatingHeader.classList.add('visible');
             
-            summaryDiv.innerHTML = `
-                <h3>Tensor Comparison Results</h3>
-                <p>Model 1: ${data.model1_files} tensor files (${model1Name})</p>
-                <p>Model 2: ${data.model2_files} tensor files (${model2Name})</p>
-                <p>Matched pairs: ${data.matches.length}</p>
-            `;
+            if (data.upload_mode === 'single_file') {
+                summaryDiv.innerHTML = `
+                    <h3>Single File Tensor Exploration</h3>
+                    <p>File: ${model1Name}</p>
+                    <p>Total tensors: ${data.model1_files}</p>
+                    <p>Pairwise comparisons: ${data.matches.length}</p>
+                    <p><em>Comparing all tensor pairs within the same file</em></p>
+                `;
+            } else if (data.upload_mode === 'dual_pth') {
+                summaryDiv.innerHTML = `
+                    <h3>Direct Tensor File Comparison</h3>
+                    <p>File 1: ${model1Name} (${data.model1_files} tensors)</p>
+                    <p>File 2: ${model2Name} (${data.model2_files} tensors)</p>
+                    <p>Tensor comparisons: <strong>${data.matches.length}</strong></p>
+                    <p><em>Direct comparison of .pth tensor files</em></p>
+                    <div style="margin-top: 15px; padding: 10px; background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; color: #856404;">
+                        <strong>⚠️ Known Issue:</strong> .pth file comparisons are experimental and may be buggy. 
+                        Some features may not work correctly or may cause unexpected behavior. 
+                        For most reliable results, use archive comparisons instead.
+                    </div>
+                `;
+            } else {
+                summaryDiv.innerHTML = `
+                    <h3>Model Archive Comparison</h3>
+                    <p>Model 1: ${data.model1_files} tensor files (${model1Name})</p>
+                    <p>Model 2: ${data.model2_files} tensor files (${model2Name})</p>
+                    <p>Matched pairs: ${data.matches.length}</p>
+                `;
+            }
             
             matchesContainer.innerHTML = '';
             
-            // Group matches by layer
-            const layerGroups = {};
-            data.matches.forEach((match, index) => {
-                if (!layerGroups[match.layer_num]) {
-                    layerGroups[match.layer_num] = [];
-                }
-                layerGroups[match.layer_num].push({...match, match_index: index});
-            });
-            
-            // Display each layer group
-            Object.keys(layerGroups).sort((a, b) => parseInt(a) - parseInt(b)).forEach(layerNum => {
+            // Handle dual .pth files - use same interface as archive mode for consistency
+            if (data.upload_mode === 'dual_pth') {
+                // Direct tensor comparison - show all matches in one simple group
+                const tensorSection = document.createElement('div');
+                tensorSection.className = 'layer-section';
+                tensorSection.id = 'tensor-comparisons';
+                
+                const sectionTitle = document.createElement('h3');
+                sectionTitle.className = 'layer-title';
+                sectionTitle.textContent = `Tensor Comparisons (${data.matches.length} pairs)`;
+                tensorSection.appendChild(sectionTitle);
+                
+                data.matches.forEach((match, index) => {
+                    match.match_index = index; // Ensure proper indexing
+                    
+                    // Create match element directly for dual .pth
+                    const matchDiv = document.createElement('div');
+                    matchDiv.className = 'match-item collapsed'; // Start collapsed
+                    matchDiv.dataset.matchIndex = match.match_index;
+                    
+                    // Generate summary for tensor comparison
+                    let quickSummary = '';
+                    if (match.diff_stats && !match.diff_stats.error) {
+                        quickSummary = `<span class="match-summary">Max Diff: ${match.diff_stats.abs_diff_max.toFixed(6)}, Cosine Sim: ${match.diff_stats.cosine_sim.toFixed(4)}</span>`;
+                    } else if (match.diff_stats && match.diff_stats.error) {
+                        quickSummary = `<span class="match-summary">Error: ${match.diff_stats.error}</span>`;
+                    }
+
+                    matchDiv.innerHTML = `
+                        <div class="match-header" onclick="toggleMatch(${match.match_index})">
+                            <div style="display: flex; align-items: center;">
+                                <span class="drag-handle" onclick="event.stopPropagation()">⋮⋮</span>
+                                <div>
+                                    <span>${match.stage_display}</span>
+                                    ${quickSummary}
+                                </div>
+                            </div>
+                            <span class="collapse-indicator">▼</span>
+                        </div>
+                        <div class="match-content">
+                            <div class="tensor-info">
+                                <div class="tensor-details">
+                                    <strong>File 1:</strong> ${match.model1_file}<br>
+                                    Shape: [${match.model1_data.shape.join(', ')}]
+                                </div>
+                                <div class="tensor-details">
+                                    <strong>File 2:</strong> ${match.model2_file}<br>
+                                    Shape: [${match.model2_data.shape.join(', ')}]
+                                </div>
+                            </div>
+                            ${match.diff_stats && !match.diff_stats.error ? `
+                            <div class="summary-stats">
+                                <h5>Summary Statistics</h5>
+                                <div class="stats-grid">
+                                    <div class="stat-item">
+                                        <span class="stat-label">Model 1 Mean:</span>
+                                        <span class="stat-value">${match.model1_data.mean.toFixed(6)}</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">Model 2 Mean:</span>
+                                        <span class="stat-value">${match.model2_data.mean.toFixed(6)}</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">Model 1 Std:</span>
+                                        <span class="stat-value">${match.model1_data.std.toFixed(6)}</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">Model 2 Std:</span>
+                                        <span class="stat-value">${match.model2_data.std.toFixed(6)}</span>
+                                    </div>
+                                    <div class="stat-item highlight">
+                                        <span class="stat-label">Max Difference:</span>
+                                        <span class="stat-value">${match.diff_stats.abs_diff_max.toFixed(6)}</span>
+                                    </div>
+                                    <div class="stat-item highlight">
+                                        <span class="stat-label">Cosine Similarity:</span>
+                                        <span class="stat-value">${match.diff_stats.cosine_sim.toFixed(6)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            ` : ''}
+                            <div class="tensor-values">
+                                <button class="inspect-btn" onclick="showTensorValues(${match.match_index})">
+                                    Inspect Raw Tensor Values
+                                </button>
+                                ${match.diff_stats && !match.diff_stats.error ? `<button class="inspect-btn" onclick="jumpToMaxDiffInTensor(${match.match_index})" style="background-color: #dc3545; margin-left: 10px;">🎯 Jump to Max Diff</button>` : ''}
+                                ${match.diff_stats && !match.diff_stats.error ? `<button class="inspect-btn" onclick="quickManualMapping(${match.match_index})" style="background-color: #17a2b8; margin-left: 10px;">🔧 Manual Mapping</button>` : ''}
+                                
+                                <!-- Full tensor inspection interface (reuse from archive mode) -->
+                                <div class="values-container" id="values-${match.match_index}" style="display: none;">
+                                    
+                                    <!-- Dimension Mapping Controls -->
+                                    <div class="dimension-mapping" id="dimension-mapping-${match.match_index}" style="display: none; margin-bottom: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 5px;">
+                                        <h4>Manual Dimension Mapping</h4>
+                                        <p>Control which dimensions to slice for each tensor independently:</p>
+                                        <div id="mapping-controls-${match.match_index}"></div>
+                                        <button onclick="applyDimensionMapping(${match.match_index})" style="margin-top: 10px; background-color: #28a745;">Apply Mapping</button>
+                                        <button onclick="toggleMappingMode(${match.match_index})" style="margin-top: 10px; margin-left: 10px; background-color: #6c757d;">Switch to Auto Mode</button>
+                                    </div>
+                                    
+                                    <!-- Original slice controls -->
+                                    <div class="slice-controls" id="auto-controls-${match.match_index}">
+                                        <div id="dimension-controls-${match.match_index}"></div>
+                                        <div class="slider-group">
+                                            <label for="count-slider-${match.match_index}">Values to Show: <span id="count-value-${match.match_index}">10</span></label>
+                                            <input type="range" id="count-slider-${match.match_index}" min="1" max="100" value="10" 
+                                                   oninput="updateSliderValue(${match.match_index}, 'count')" 
+                                                   onchange="updateTensorValues(${match.match_index})">
+                                        </div>
+                                        <div class="manual-controls">
+                                            <input type="number" id="count-input-${match.match_index}" value="10" min="1" max="100" 
+                                                   onchange="syncSliderFromInput(${match.match_index}, 'count')" placeholder="Count">
+                                            <button onclick="updateTensorValues(${match.match_index})">Update</button>
+                                        </div>
+                                        
+                                        <!-- Real-time statistics display -->
+                                        <div class="real-time-stats" id="real-time-stats-${match.match_index}" style="margin-top: 15px; padding: 10px; background-color: #e3f2fd; border-radius: 5px;">
+                                            <h6>Real-time Slice Statistics</h6>
+                                            <div id="slice-stats-${match.match_index}">
+                                                <!-- Populated by updateTensorValues -->
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Tensor values display -->
+                                    <div id="tensor-display-${match.match_index}"></div>
+                                </div>
+                            </div>
+                        </div>
+                        </div>
+                    `;
+                    
+                    tensorSection.appendChild(matchDiv);
+                });
+                
+                matchesContainer.appendChild(tensorSection);
+            } else {
+                // Group matches by layer for archive comparisons
+                const layerGroups = {};
+                data.matches.forEach((match, index) => {
+                    if (!layerGroups[match.layer_num]) {
+                        layerGroups[match.layer_num] = [];
+                    }
+                    layerGroups[match.layer_num].push({...match, match_index: index});
+                });
+                
+                // Display each layer group
+                Object.keys(layerGroups).sort((a, b) => parseInt(a) - parseInt(b)).forEach(layerNum => {
                 const layerDiv = document.createElement('div');
                 layerDiv.className = 'layer-group';
                 layerDiv.innerHTML = `<h3>Layer ${layerNum}</h3>`;
@@ -961,9 +1381,12 @@
 
                     matchDiv.innerHTML = `
                         <div class="match-header" onclick="toggleMatch(${match.match_index})">
-                            <div>
-                                <span>${match.stage_display}</span>
-                                ${quickSummary}
+                            <div style="display: flex; align-items: center;">
+                                <span class="drag-handle" onclick="event.stopPropagation()">⋮⋮</span>
+                                <div>
+                                    <span>${match.stage_display}</span>
+                                    ${quickSummary}
+                                </div>
                             </div>
                             <span class="collapse-indicator">▼</span>
                         </div>
@@ -1016,27 +1439,298 @@
                 });
                 
                 matchesContainer.appendChild(layerDiv);
-            });
+                });
+            } // Close the else block for archive mode
             
             resultsDiv.style.display = 'block';
             
-            // Show the control buttons
+            // Show the results controls and control buttons
+            document.getElementById('results-controls').style.display = 'block';
             document.getElementById('control-buttons').style.display = 'block';
+            
+            // Initialize sortable functionality for drag-and-drop reordering
+            initializeSortable();
+        }
+        
+        // Drag and Drop + Reordering Functionality
+        let sortableInstance = null;
+        
+        function initializeSortable() {
+            const matchesContainer = document.getElementById('matches-container');
+            
+            if (sortableInstance) {
+                sortableInstance.destroy();
+            }
+            
+            sortableInstance = new Sortable(matchesContainer, {
+                handle: '.drag-handle',
+                animation: 150,
+                ghostClass: 'sortable-ghost',
+                chosenClass: 'sortable-chosen',
+                onEnd: function(evt) {
+                    updateMatchOrder(evt.oldIndex, evt.newIndex);
+                }
+            });
+        }
+        
+        function updateMatchOrder(oldIndex, newIndex) {
+            // Reorder globalMatches array
+            const item = globalMatches.splice(oldIndex, 1)[0];
+            globalMatches.splice(newIndex, 0, item);
+            
+            // Update match indices
+            globalMatches.forEach((match, index) => {
+                match.match_index = index;
+            });
+            
+            console.log(`Moved match from position ${oldIndex} to ${newIndex}`);
+            
+            // Optionally sync with backend
+            syncMatchOrderWithBackend(oldIndex, newIndex);
+        }
+        
+        async function syncMatchOrderWithBackend(oldIndex, newIndex) {
+            try {
+                const response = await fetch('/reorder_matches', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        old_index: oldIndex,
+                        new_index: newIndex
+                    })
+                });
+                
+                const result = await response.json();
+                if (!result.success) {
+                    console.warn('Backend reorder sync failed:', result.error);
+                }
+            } catch (error) {
+                console.warn('Failed to sync match order with backend:', error);
+            }
+        }
+        
+        // Grouping and Filtering Functions
+        function regroupMatches() {
+            const groupBy = document.getElementById('group-by').value;
+            console.log(`Regrouping matches by: ${groupBy}`);
+            
+            let groupedMatches = {};
+            
+            switch(groupBy) {
+                case 'layer':
+                    globalMatches.forEach(match => {
+                        const key = `Layer ${match.layer_num}`;
+                        if (!groupedMatches[key]) groupedMatches[key] = [];
+                        groupedMatches[key].push(match);
+                    });
+                    break;
+                    
+                case 'name':
+                    globalMatches.forEach(match => {
+                        const key = match.stage || 'Unknown';
+                        if (!groupedMatches[key]) groupedMatches[key] = [];
+                        groupedMatches[key].push(match);
+                    });
+                    break;
+                    
+                case 'similarity':
+                    globalMatches.forEach(match => {
+                        let key = 'Unknown';
+                        if (match.diff_stats && match.diff_stats.cosine_sim !== undefined) {
+                            if (match.diff_stats.cosine_sim > 0.95) key = 'High Similarity (>95%)';
+                            else if (match.diff_stats.cosine_sim > 0.8) key = 'Medium Similarity (80-95%)';
+                            else key = 'Low Similarity (<80%)';
+                        } else if (match.match_type !== 'both') {
+                            key = 'Single Model Only';
+                        }
+                        if (!groupedMatches[key]) groupedMatches[key] = [];
+                        groupedMatches[key].push(match);
+                    });
+                    break;
+                    
+                case 'none':
+                    groupedMatches['All Matches'] = [...globalMatches];
+                    break;
+            }
+            
+            rerenderMatches(groupedMatches);
+        }
+        
+        function resortMatches() {
+            const sortBy = document.getElementById('sort-by').value;
+            console.log(`Resorting matches by: ${sortBy}`);
+            
+            let sortedMatches = [...globalMatches];
+            
+            switch(sortBy) {
+                case 'layer_stage':
+                    sortedMatches.sort((a, b) => {
+                        if (a.layer_num !== b.layer_num) return a.layer_num - b.layer_num;
+                        return (a.stage_index || 0) - (b.stage_index || 0);
+                    });
+                    break;
+                    
+                case 'name':
+                    sortedMatches.sort((a, b) => {
+                        const nameA = (a.stage || a.model1_file || '').toLowerCase();
+                        const nameB = (b.stage || b.model1_file || '').toLowerCase();
+                        return nameA.localeCompare(nameB);
+                    });
+                    break;
+                    
+                case 'similarity':
+                    sortedMatches.sort((a, b) => {
+                        const simA = (a.diff_stats && a.diff_stats.cosine_sim !== undefined) ? a.diff_stats.cosine_sim : -1;
+                        const simB = (b.diff_stats && b.diff_stats.cosine_sim !== undefined) ? b.diff_stats.cosine_sim : -1;
+                        return simB - simA; // High similarity first
+                    });
+                    break;
+                    
+                case 'difference':
+                    sortedMatches.sort((a, b) => {
+                        const diffA = (a.diff_stats && a.diff_stats.abs_diff_max !== undefined) ? a.diff_stats.abs_diff_max : 0;
+                        const diffB = (b.diff_stats && b.diff_stats.abs_diff_max !== undefined) ? b.diff_stats.abs_diff_max : 0;
+                        return diffB - diffA; // Largest difference first
+                    });
+                    break;
+            }
+            
+            globalMatches = sortedMatches;
+            
+            // Update match indices
+            globalMatches.forEach((match, index) => {
+                match.match_index = index;
+            });
+            
+            // Regroup after sorting to maintain current grouping
+            regroupMatches();
+        }
+        
+        function filterMatches() {
+            const showIdentical = document.getElementById('show-identical').checked;
+            const showDifferent = document.getElementById('show-different').checked;
+            const showErrors = document.getElementById('show-errors').checked;
+            
+            console.log(`Filtering matches: identical=${showIdentical}, different=${showDifferent}, errors=${showErrors}`);
+            
+            const matchDivs = document.querySelectorAll('[id^="match-layer-"]');
+            matchDivs.forEach(layerDiv => {
+                const matchItems = layerDiv.querySelectorAll('.match-item');
+                let visibleMatches = 0;
+                
+                matchItems.forEach((matchDiv, index) => {
+                    const matchData = globalMatches.find(m => m.match_index === parseInt(matchDiv.dataset.matchIndex));
+                    if (!matchData) return;
+                    
+                    let shouldShow = false;
+                    
+                    if (matchData.diff_stats && matchData.diff_stats.error) {
+                        shouldShow = showErrors;
+                    } else if (matchData.match_type !== 'both') {
+                        shouldShow = showDifferent; // Single model only counts as "different"
+                    } else if (matchData.diff_stats) {
+                        const isIdentical = matchData.diff_stats.abs_diff_max < 1e-6;
+                        shouldShow = isIdentical ? showIdentical : showDifferent;
+                    } else {
+                        shouldShow = showDifferent;
+                    }
+                    
+                    matchDiv.style.display = shouldShow ? 'block' : 'none';
+                    if (shouldShow) visibleMatches++;
+                });
+                
+                // Hide layer div if no matches are visible
+                layerDiv.style.display = visibleMatches > 0 ? 'block' : 'none';
+            });
+        }
+        
+        function rerenderMatches(groupedMatches) {
+            const matchesContainer = document.getElementById('matches-container');
+            matchesContainer.innerHTML = '';
+            
+            Object.keys(groupedMatches).forEach(groupName => {
+                const matches = groupedMatches[groupName];
+                if (matches.length === 0) return;
+                
+                const layerDiv = document.createElement('div');
+                layerDiv.className = 'layer-section';
+                layerDiv.id = `match-layer-${groupName.replace(/[^a-zA-Z0-9]/g, '-')}`;
+                
+                const layerTitle = document.createElement('h3');
+                layerTitle.className = 'layer-title';
+                layerTitle.textContent = `${groupName} (${matches.length} matches)`;
+                layerDiv.appendChild(layerTitle);
+                
+                matches.forEach(match => {
+                    const matchDiv = document.createElement('div');
+                    matchDiv.className = 'match-item';
+                    matchDiv.dataset.matchIndex = match.match_index;
+                    
+                    // Generate quick summary
+                    let quickSummary = '';
+                    if (match.diff_stats && !match.diff_stats.error && match.match_type === 'both') {
+                        quickSummary = `<span class="match-summary">Max Diff: ${match.diff_stats.abs_diff_max.toFixed(6)}, Cosine Sim: ${match.diff_stats.cosine_sim.toFixed(4)}</span>`;
+                    } else if (match.match_type !== 'both') {
+                        quickSummary = `<span class="match-summary">Single model only</span>`;
+                    } else if (match.diff_stats && match.diff_stats.error) {
+                        quickSummary = `<span class="match-summary">Error: ${match.diff_stats.error}</span>`;
+                    }
+                    
+                    matchDiv.innerHTML = `
+                        <div class="match-header" onclick="toggleMatch(${match.match_index})">
+                            <div style="display: flex; align-items: center;">
+                                <span class="drag-handle" onclick="event.stopPropagation()">⋮⋮</span>
+                                <div>
+                                    <span>${match.stage_display}</span>
+                                    ${quickSummary}
+                                </div>
+                            </div>
+                            <span class="collapse-indicator">▼</span>
+                        </div>
+                        <div class="match-content" style="display: none;">
+                            <div class="tensor-info">
+                                <!-- Content will be added when expanded -->
+                            </div>
+                        </div>
+                    `;
+                    
+                    layerDiv.appendChild(matchDiv);
+                });
+                
+                matchesContainer.appendChild(layerDiv);
+            });
+            
+            // Reinitialize sortable after rerendering
+            initializeSortable();
+            
+            // Apply current filters
+            filterMatches();
         }
         
         async function showTensorValues(matchIndex) {
+            console.log(`showTensorValues called for matchIndex: ${matchIndex}`);
             const valuesContainer = document.getElementById(`values-${matchIndex}`);
+            console.log(`valuesContainer:`, valuesContainer);
+            
             if (valuesContainer.style.display === 'none') {
                 valuesContainer.style.display = 'block';
+                console.log(`Showing tensor values for match ${matchIndex}`);
+                
                 // Initialize slider ranges based on tensor size when first shown
                 await initializeSliderRanges(matchIndex);
                 await updateTensorValues(matchIndex);
             } else {
                 valuesContainer.style.display = 'none';
+                console.log(`Hiding tensor values for match ${matchIndex}`);
             }
         }
         
         async function initializeSliderRanges(matchIndex) {
+            console.log(`initializeSliderRanges called for matchIndex: ${matchIndex}`);
+            console.log(`globalMatches[${matchIndex}]:`, globalMatches[matchIndex]);
+            
             // Get the ACTUAL tensor shape after TP-aware reshaping from the backend
             if (globalMatches[matchIndex]) {
                 const match = globalMatches[matchIndex];
@@ -1097,8 +1791,15 @@
             let slidersHTML = '<p><strong>Dimension Sliders (Final Shape):</strong></p>';
             
             // Show original shapes if available
-            if (originalShapes) {
-                slidersHTML += `<p><em>Original shapes: [${originalShapes.shape1.join(', ')}] vs [${originalShapes.shape2.join(', ')}] → Final: [${tensorShape.join(', ')}]</em></p>`;
+            if (originalShapes && originalShapes.shape1 && originalShapes.shape2) {
+                try {
+                    slidersHTML += `<p><em>Original shapes: [${originalShapes.shape1.join(', ')}] vs [${originalShapes.shape2.join(', ')}] → Final: [${tensorShape.join(', ')}]</em></p>`;
+                } catch (e) {
+                    console.warn('Error displaying original shapes:', e);
+                    slidersHTML += `<p><em>Final shape: [${tensorShape.join(', ')}]</em></p>`;
+                }
+            } else {
+                slidersHTML += `<p><em>Final shape: [${tensorShape.join(', ')}]</em></p>`;
             }
             
             // Create sliders for each dimension of the final tensor shape
@@ -1129,7 +1830,16 @@
         function getDimensionIndices(matchIndex) {
             const indices = [];
             const dimensionContainer = document.getElementById(`dimension-controls-${matchIndex}`);
+            
+            console.log('getDimensionIndices - dimensionContainer found:', !!dimensionContainer);
+            
+            if (!dimensionContainer) {
+                console.error(`Could not find dimension-controls-${matchIndex} element`);
+                return [];
+            }
+            
             const sliders = dimensionContainer.querySelectorAll('input[type="range"]');
+            console.log('getDimensionIndices - found sliders:', sliders.length);
             
             // Simply get the slider values in order - they now correspond directly to final tensor dimensions
             sliders.forEach((slider, index) => {
@@ -1176,11 +1886,24 @@
         }
         
         async function updateTensorValues(matchIndex) {
+            console.log('updateTensorValues called with matchIndex:', matchIndex);
+            
             const countSlider = document.getElementById(`count-slider-${matchIndex}`);
             const displayDiv = document.getElementById(`tensor-display-${matchIndex}`);
             
+            console.log('countSlider found:', !!countSlider);
+            console.log('displayDiv found:', !!displayDiv);
+            
+            if (!displayDiv) {
+                console.error(`Could not find tensor-display-${matchIndex} element`);
+                return;
+            }
+            
             const dimensionIndices = getDimensionIndices(matchIndex);
             const count = parseInt(countSlider.value) || 10;
+            
+            console.log('dimensionIndices:', dimensionIndices);
+            console.log('count:', count);
             
             displayDiv.innerHTML = '<div class="loading">Loading tensor values...</div>';
             
@@ -1460,9 +2183,16 @@
         }
         
         function toggleMatch(matchIndex) {
+            console.log(`toggleMatch called for matchIndex: ${matchIndex}`);
             const matchItem = document.querySelector(`[data-match-index="${matchIndex}"]`);
+            console.log(`Found matchItem:`, matchItem);
+            
             if (matchItem) {
+                const wasCollapsed = matchItem.classList.contains('collapsed');
                 matchItem.classList.toggle('collapsed');
+                console.log(`Toggled from ${wasCollapsed ? 'collapsed' : 'expanded'} to ${matchItem.classList.contains('collapsed') ? 'collapsed' : 'expanded'}`);
+            } else {
+                console.error(`Could not find match item with index ${matchIndex}`);
             }
         }
         
@@ -2106,11 +2836,99 @@
             }
         }
         
-        // Initialize
-        setupDropZone('model1-drop', 'model1-file', 'model1-info');
-        setupDropZone('model2-drop', 'model2-file', 'model2-info');
         
+        function updateUploadButton() {
+            const uploadBtn = document.getElementById('upload-btn');
+            uploadBtn.disabled = !(file1 && file2 && detectedMode && detectedMode !== 'mixed');
+            
+            // Update button text and show mode info
+            if (detectedMode === 'dual_archive') {
+                uploadBtn.textContent = 'Compare Model Archives';
+            } else if (detectedMode === 'dual_pth') {
+                uploadBtn.textContent = 'Compare Tensor Files';
+            } else if (detectedMode === 'mixed') {
+                uploadBtn.textContent = 'Incompatible File Types';
+                uploadBtn.disabled = true;
+            } else if (file1 || file2) {
+                uploadBtn.textContent = 'Upload Both Files';
+            } else {
+                uploadBtn.textContent = 'Upload Files to Compare';
+            }
+        }
+        
+        async function uploadAndCompare() {
+            showProgress();
+            updateProgress(10);
+            
+            const formData = new FormData();
+            
+            if (detectedMode === 'dual_archive') {
+                // Archive vs Archive comparison
+                formData.append('model1', file1);
+                formData.append('model2', file2);
+            } else if (detectedMode === 'dual_pth') {
+                // .pth vs .pth direct comparison (new feature!)
+                formData.append('model1', file1);
+                formData.append('model2', file2);
+                formData.append('upload_mode', 'dual_pth');
+            } else {
+                alert('Please upload two compatible files: either 2 archives or 2 .pth files');
+                hideProgress();
+                return;
+            }
+            
+            try {
+                updateProgress(50);
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                updateProgress(80);
+                const result = await response.json();
+                
+                if (result.error) {
+                    throw new Error(result.error);
+                }
+                
+                updateProgress(90);
+                await displayResults(result);
+                updateProgress(100);
+                
+                setTimeout(hideProgress, 500);
+                
+            } catch (error) {
+                hideProgress();
+                document.getElementById('results').innerHTML = 
+                    `<div class="error">Error: ${error.message}</div>`;
+                document.getElementById('results').style.display = 'block';
+            }
+        }
+        
+        // Initialize two-box upload system
+        setupDropZone('file1-drop', 'file1', 'file1-info');
+        setupDropZone('file2-drop', 'file2', 'file2-info');
         document.getElementById('upload-btn').addEventListener('click', uploadAndCompare);
+        
+        
+        function updateDetectedMode() {
+            if (file1 && file2) {
+                const file1IsArchive = file1.name.match(/\.(zip|tar\.gz|tgz)$/i);
+                const file2IsArchive = file2.name.match(/\.(zip|tar\.gz|tgz)$/i);
+                const file1IsPth = file1.name.match(/\.(pth|pt)$/i);
+                const file2IsPth = file2.name.match(/\.(pth|pt)$/i);
+                
+                if (file1IsArchive && file2IsArchive) {
+                    detectedMode = 'dual_archive';
+                } else if (file1IsPth && file2IsPth) {
+                    detectedMode = 'dual_pth';
+                } else {
+                    detectedMode = 'mixed'; // Different types - we'll handle this
+                }
+            } else {
+                detectedMode = null;
+            }
+        }
     </script>
 </body>
 </html>
