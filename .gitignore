@@ -183,3 +183,4 @@ flask_session/
 *.bak
 *.backup
 *.old
+.vercel

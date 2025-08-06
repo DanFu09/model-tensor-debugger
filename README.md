@@ -172,9 +172,51 @@ The app matches tensors based on the stage name (everything after the layer numb
 
 For a complete list of known issues, workarounds, and planned fixes, please refer to [`KNOWN_BUGS.md`](KNOWN_BUGS.md).
 
+## Deployment
+
+### 🚀 Vercel Deployment (Recommended)
+
+This app is configured for easy deployment on Vercel:
+
+1. **One-Click Deploy:**
+   - Fork this repository
+   - Connect to [Vercel](https://vercel.com)
+   - Deploy automatically with zero configuration
+
+2. **Manual Deploy:**
+   ```bash
+   npm i -g vercel
+   vercel login
+   vercel
+   ```
+
+3. **Verify Setup:**
+   ```bash
+   python verify_deployment.py
+   ```
+
+See [`DEPLOYMENT.md`](DEPLOYMENT.md) for detailed deployment instructions and troubleshooting.
+
+### 🏠 Local Development
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd model-tensor-debugger
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the application
+python app.py
+
+# Visit http://localhost:5000
+```
+
 ## Technical Notes
 
 - **PyTorch Compatibility**: Uses PyTorch 2.2.2 with distributed features for modern tensor file loading
 - **Memory Efficient**: Tensors are processed incrementally and not stored in frontend
 - **Error Handling**: Robust handling of shape mismatches, NaN values, and compatibility issues
 - **Performance**: Optimized for comparing large numbers of tensor files across many layers
+- **Serverless Ready**: Configured for Vercel deployment with 100MB upload limit

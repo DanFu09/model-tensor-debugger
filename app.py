@@ -11,8 +11,10 @@ from pathlib import Path
 import plotly.graph_objs as go
 import plotly.utils
 
-app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
+# Configure Flask to work with Vercel's directory structure
+template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+app = Flask(__name__, template_folder=template_dir)
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size (reduced for serverless)
 
 def extract_archive(file_path, extract_to):
     """Extract zip or tar.gz files"""
@@ -730,6 +732,15 @@ def calculate_tensor_diff(tensor1, tensor2):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/health')
+def health():
+    """Health check endpoint for monitoring"""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'ML Model Tensor Debugger',
+        'version': '1.0.0'
+    })
 
 def detect_upload_mode(files, form_data):
     """Detect upload mode based on provided files"""

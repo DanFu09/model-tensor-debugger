@@ -1,0 +1,35 @@
+# Test files and data
+test_*.py
+test_*.pth
+create_*_test_files.py
+*.png
+screenshots/
+
+# Development files
+.git/
+.gitignore
+*.md
+ai_docs/
+tests/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
