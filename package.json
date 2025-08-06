@@ -1,0 +1,18 @@
+{
+  "name": "ml-model-tensor-debugger",
+  "version": "1.0.0",
+  "description": "ML Model Tensor Debugger - A web application for comparing PyTorch tensor outputs",
+  "engines": {
+    "node": "18.x",
+    "npm": ">=8.0.0"
+  },
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "./build.sh",
+    "start": "python api/app.py",
+    "vercel-build": "echo 'Using custom Python build process'"
+  },
+  "keywords": ["pytorch", "tensor", "debugging", "ml", "ai"],
+  "author": "ML Model Tensor Debugger",
+  "license": "MIT"
+}

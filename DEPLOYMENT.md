@@ -5,7 +5,7 @@
 This application is configured for deployment on Vercel with the following setup:
 
 ### Prerequisites
-- Node.js and npm (for Vercel CLI)
+- Node.js 18.x or newer and npm 8+ (for Vercel CLI)
 - Git repository pushed to GitHub/GitLab/Bitbucket
 
 ### Automatic Deployment
@@ -70,14 +70,16 @@ MAX_CONTENT_LENGTH=104857600  # 100MB in bytes
 
 **Common Issues:**
 
-1. **Build Fails with distutils Error:**
+1. **Build Fails with distutils/Node.js Error:**
    ```
    ModuleNotFoundError: No module named 'distutils'
    ```
    **Solution:** This is fixed by:
    - Using Python 3.11 (specified in `runtime.txt`)
+   - Using Node.js 18.x (specified in `package.json` and `.nvmrc`)
    - Setting `SETUPTOOLS_USE_DISTUTILS=stdlib` in `vercel.json`
    - Including `setuptools>=65.0.0` in requirements
+   - Using `@vercel/python@4` (latest Python runtime)
 
 2. **PyTorch Installation Issues:**
    - Large PyTorch wheel may cause build timeouts
