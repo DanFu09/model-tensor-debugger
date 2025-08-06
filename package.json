@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "ML Model Tensor Debugger - A web application for comparing PyTorch tensor outputs",
   "engines": {
-    "node": "18.x",
+    "node": "22.x",
     "npm": ">=8.0.0"
   },
   "scripts": {
