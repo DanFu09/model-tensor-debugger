@@ -1,0 +1,14 @@
+# Vercel-optimized requirements
+# These versions are tested to work well in serverless environment
+
+flask==2.3.3
+torch==2.0.1
+numpy==1.24.3
+plotly==5.17.0
+werkzeug==2.3.7
+
+# Explicitly include setuptools to avoid distutils issues
+setuptools>=65.0.0
+
+# Add wheel for better package installation
+wheel

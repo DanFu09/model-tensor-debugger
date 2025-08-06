@@ -70,19 +70,31 @@ MAX_CONTENT_LENGTH=104857600  # 100MB in bytes
 
 **Common Issues:**
 
-1. **Build Fails:**
-   - Check that all dependencies are in `requirements.txt`
-   - Ensure Python version compatibility
+1. **Build Fails with distutils Error:**
+   ```
+   ModuleNotFoundError: No module named 'distutils'
+   ```
+   **Solution:** This is fixed by:
+   - Using Python 3.11 (specified in `runtime.txt`)
+   - Setting `SETUPTOOLS_USE_DISTUTILS=stdlib` in `vercel.json`
+   - Including `setuptools>=65.0.0` in requirements
 
-2. **Function Timeout:**
+2. **PyTorch Installation Issues:**
+   - Large PyTorch wheel may cause build timeouts
+   - Solution: Using optimized `vercel.json` with 50MB lambda size limit
+   - CPU-only PyTorch version is used automatically
+
+3. **Function Timeout:**
    - Large tensor files may cause timeouts
    - Consider preprocessing files or splitting operations
+   - Max duration set to 60 seconds in `vercel.json`
 
-3. **Memory Issues:**
+4. **Memory Issues:**
    - Very large tensors may exceed memory limits
+   - Memory limit increased to 1GB in `vercel.json`
    - Implement streaming or chunked processing for large files
 
-4. **Template Not Found:**
+5. **Template Not Found:**
    - Ensure `templates/` directory is properly structured
    - Check that Flask template_folder path is correct
 
