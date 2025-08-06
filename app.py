@@ -35,16 +35,22 @@ def load_tensor_files(directory):
             print(f"Loading: {file_path.name}")
             tensor = None
             
-            # Try multiple loading strategies for compatibility
+            # Try multiple loading strategies for compatibility - ALWAYS map to CPU
             # Strategy 1: Normal loading
             try:
                 tensor = torch.load(file_path, map_location='cpu')
+                # Ensure tensor is definitely on CPU
+                if hasattr(tensor, 'cpu'):
+                    tensor = tensor.cpu()
             except Exception as e1:
                 print(f"  Normal loading failed: {e1}")
                 
                 # Strategy 2: Load with weights_only=True (if available)
                 try:
                     tensor = torch.load(file_path, map_location='cpu', weights_only=True)
+                    # Ensure tensor is definitely on CPU
+                    if hasattr(tensor, 'cpu'):
+                        tensor = tensor.cpu()
                     print("  Loaded with weights_only=True")
                 except Exception as e2:
                     print(f"  weights_only loading failed: {e2}")
@@ -438,6 +444,10 @@ def apply_rank_zero_truncation(tensor1, tensor2):
 
 def smart_reshape_for_tp(tensor1, tensor2):
     """Intelligently reshape tensors for tensor parallel compatibility"""
+    # Ensure both tensors are on CPU
+    tensor1 = tensor1.cpu() if hasattr(tensor1, 'cpu') else tensor1
+    tensor2 = tensor2.cpu() if hasattr(tensor2, 'cpu') else tensor2
+    
     shape1, shape2 = tensor1.shape, tensor2.shape
     
     # If already compatible, return as-is
@@ -490,6 +500,10 @@ def smart_reshape_for_tp(tensor1, tensor2):
 def calculate_tensor_diff(tensor1, tensor2):
     """Calculate difference statistics between two tensors with smart TP reshaping"""
     try:
+        # Ensure both tensors are on CPU
+        tensor1 = tensor1.cpu() if hasattr(tensor1, 'cpu') else tensor1
+        tensor2 = tensor2.cpu() if hasattr(tensor2, 'cpu') else tensor2
+        
         original_shapes = (list(tensor1.shape), list(tensor2.shape))
         
         # Handle shape differences using smart TP-aware reshaping
@@ -629,8 +643,10 @@ stored_matches = []
 def get_tensor_values():
     data = request.json
     match_index = data.get('match_index', 0)
-    start_index = data.get('start_index', 0)
+    dimension_indices = data.get('dimension_indices', [])
     count = data.get('count', 10)
+    get_argmax = data.get('get_argmax', False)
+    get_final_shape = data.get('get_final_shape', False)
     
     if match_index >= len(stored_matches):
         return jsonify({'error': 'Invalid match index'}), 400
@@ -644,18 +660,44 @@ def get_tensor_values():
         has_tensor1 = tensor1 is not None
         has_tensor2 = tensor2 is not None
         
+        # Store original shapes before any reshaping
+        original_shapes = None
+        if has_tensor1 and has_tensor2:
+            original_shape1 = list(tensor1.shape)
+            original_shape2 = list(tensor2.shape)
+            original_shapes = {
+                'shape1': original_shape1,
+                'shape2': original_shape2
+            }
+        
+        # Ensure tensors are on CPU before any operations
+        if has_tensor1 and hasattr(tensor1, 'cpu'):
+            tensor1 = tensor1.cpu()
+        if has_tensor2 and hasattr(tensor2, 'cpu'):
+            tensor2 = tensor2.cpu()
+        
         # Apply TP-aware reshaping if both tensors available and shapes differ
         if has_tensor1 and has_tensor2 and tensor1.shape != tensor2.shape:
             try:
                 tensor1, tensor2 = smart_reshape_for_tp(tensor1, tensor2)
                 print(f"  Reshaped tensors for value display: {match['model1_file']} and {match['model2_file']}")
+                print(f"  Original shapes: {original_shapes['shape1']} vs {original_shapes['shape2']} → Final: {list(tensor1.shape)}")
             except Exception as e:
                 print(f"  Could not reshape tensors for value display: {e}")
         
         # Use the available tensor to determine shape and processing
         primary_tensor = tensor1 if has_tensor1 else tensor2
         
-        # Handle scalars and different tensor shapes for display
+        # If just requesting final shape info, return it early
+        if get_final_shape:
+            return jsonify({
+                'tensor_shape': list(primary_tensor.shape),
+                'original_shapes': original_shapes,
+                'display_type': f'{len(primary_tensor.shape)}D tensor',
+                'slice_info': 'Shape information only'
+            })
+        
+        # Handle scalars
         if not hasattr(primary_tensor, 'shape') or len(primary_tensor.shape) == 0:
             # Handle scalar values
             values1 = [float(tensor1)] if has_tensor1 else None
@@ -664,83 +706,128 @@ def get_tensor_values():
             return jsonify({
                 'tensor1_values': values1,
                 'tensor2_values': values2,
-                'start_index': 0,
                 'tensor_shape': [],
                 'display_type': 'scalar',
-                'argmax_index': None  # No argmax for scalars
+                'argmax_index': None,
+                'argmax_coordinates': None,
+                'slice_info': 'Scalar value'
             })
-        elif len(primary_tensor.shape) == 1:
-            # 1D tensor
-            end_idx = min(start_index + count, primary_tensor.shape[0])
-            
-            values1 = tensor1[start_index:end_idx].tolist() if has_tensor1 else None
-            values2 = tensor2[start_index:end_idx].tolist() if has_tensor2 else None
-            
-            # Calculate argmax of absolute differences if both tensors available
-            argmax_idx = None
-            if has_tensor1 and has_tensor2:
+        
+        # Calculate argmax coordinates if requested and both tensors available
+        argmax_coords = None
+        if get_argmax and has_tensor1 and has_tensor2:
+            try:
                 abs_diff = torch.abs(tensor1 - tensor2)
-                argmax_idx = int(torch.argmax(abs_diff).item())
+                flat_argmax_idx = int(torch.argmax(abs_diff).item())
+                # Convert flat index to multi-dimensional coordinates
+                argmax_coords = [int(x) for x in torch.unravel_index(torch.tensor(flat_argmax_idx), tensor1.shape)]
+                print(f"  Argmax coordinates: {argmax_coords} for tensor shape {list(tensor1.shape)}")
+            except Exception as e:
+                print(f"  Could not calculate argmax coordinates: {e}")
+        
+        # Handle dimension slicing based on tensor dimensionality
+        if len(primary_tensor.shape) == 1:
+            # 1D tensor - use dimension index directly
+            dim_idx = dimension_indices[0] if dimension_indices else 0
+            start_idx = max(0, dim_idx)
+            end_idx = min(start_idx + count, primary_tensor.shape[0])
+            
+            values1 = tensor1[start_idx:end_idx].tolist() if has_tensor1 else None
+            values2 = tensor2[start_idx:end_idx].tolist() if has_tensor2 else None
             
             return jsonify({
                 'tensor1_values': values1,
                 'tensor2_values': values2,
-                'start_index': start_index,
                 'tensor_shape': list(primary_tensor.shape),
-                'display_type': '1d',
-                'argmax_index': argmax_idx
+                'display_type': '1D tensor',
+                'argmax_index': argmax_coords[0] if argmax_coords else None,
+                'argmax_coordinates': argmax_coords,
+                'slice_info': f'Values {start_idx} to {end_idx-1}'
             })
         
-        elif len(primary_tensor.shape) == 2:
-            # 2D tensor - flatten for linear indexing
-            flat1 = tensor1.flatten() if has_tensor1 else None
-            flat2 = tensor2.flatten() if has_tensor2 else None
-            primary_flat = flat1 if has_tensor1 else flat2
+        elif len(primary_tensor.shape) >= 2:
+            # Multi-dimensional tensor - create slices based on dimension indices
+            tensor_shape = list(primary_tensor.shape)
             
-            end_idx = min(start_index + count, primary_flat.shape[0])
-            values1 = flat1[start_index:end_idx].tolist() if has_tensor1 else None
-            values2 = flat2[start_index:end_idx].tolist() if has_tensor2 else None
+            # Use the final tensor shape after any TP-aware reshaping for slicing
+            # The dimension_indices should match the final tensor shape, not the original
+            actual_shape = tensor_shape
             
-            # Calculate argmax of absolute differences if both tensors available
-            argmax_idx = None
-            if has_tensor1 and has_tensor2:
-                abs_diff = torch.abs(flat1 - flat2)
-                argmax_idx = int(torch.argmax(abs_diff).item())
+            # Adjust dimension_indices for the actual tensor shape after reshaping
+            if len(dimension_indices) > len(actual_shape):
+                # Truncate if too many indices provided
+                dim_indices = dimension_indices[:len(actual_shape)]
+            else:
+                # Pad with zeros if not enough indices
+                dim_indices = dimension_indices + [0] * (len(actual_shape) - len(dimension_indices))
             
-            return jsonify({
-                'tensor1_values': values1,
-                'tensor2_values': values2,
-                'start_index': start_index,
-                'tensor_shape': list(primary_tensor.shape),
-                'display_type': '2d (flattened)',
-                'argmax_index': argmax_idx
-            })
+            # Create slice objects for each dimension
+            slices = []
+            slice_info_parts = []
+            
+            for i, (dim_size, idx) in enumerate(zip(actual_shape, dim_indices)):
+                idx = max(0, min(idx, dim_size - 1))  # Clamp to valid range
+                
+                if i == len(actual_shape) - 1:  # Last dimension - slice a range of values
+                    start_idx = idx
+                    end_idx = min(start_idx + count, dim_size)
+                    slices.append(slice(start_idx, end_idx))
+                    slice_info_parts.append(f'dim{i}[{start_idx}:{end_idx}]')
+                else:  # Other dimensions - use specific index
+                    slices.append(idx)
+                    slice_info_parts.append(f'dim{i}[{idx}]')
+            
+            # Extract the sliced values
+            try:
+                slice_tuple = tuple(slices)
+                sliced1 = tensor1[slice_tuple] if has_tensor1 else None
+                sliced2 = tensor2[slice_tuple] if has_tensor2 else None
+                
+                # Convert to list format
+                values1 = sliced1.tolist() if has_tensor1 and sliced1 is not None else None
+                values2 = sliced2.tolist() if has_tensor2 and sliced2 is not None else None
+                
+                # Handle the case where we get a single value vs a list
+                if isinstance(values1, (int, float)):
+                    values1 = [values1]
+                if isinstance(values2, (int, float)):
+                    values2 = [values2]
+                
+                slice_info = ' × '.join(slice_info_parts)
+                display_type = f'{len(actual_shape)}D tensor slice'
+                
+                return jsonify({
+                    'tensor1_values': values1,
+                    'tensor2_values': values2,
+                    'tensor_shape': actual_shape,
+                    'display_type': display_type,
+                    'argmax_index': None,  # Not applicable for sliced view
+                    'argmax_coordinates': argmax_coords,
+                    'slice_info': slice_info
+                })
+                
+            except Exception as slice_error:
+                # Fallback to flattened view
+                print(f"  Slice failed, falling back to flattened view: {slice_error}")
+                flat1 = tensor1.flatten() if has_tensor1 else None
+                flat2 = tensor2.flatten() if has_tensor2 else None
+                
+                start_idx = 0
+                end_idx = min(count, flat1.shape[0] if flat1 is not None else flat2.shape[0])
+                
+                values1 = flat1[start_idx:end_idx].tolist() if flat1 is not None else None
+                values2 = flat2[start_idx:end_idx].tolist() if flat2 is not None else None
+                
+                return jsonify({
+                    'tensor1_values': values1,
+                    'tensor2_values': values2,
+                    'tensor_shape': tensor_shape,
+                    'display_type': 'flattened (slice failed)',
+                    'argmax_index': None,
+                    'argmax_coordinates': argmax_coords,
+                    'slice_info': f'Flattened view: elements 0-{end_idx-1}'
+                })
         
-        else:
-            # Multi-dimensional tensor - flatten for display
-            flat1 = tensor1.flatten() if has_tensor1 else None
-            flat2 = tensor2.flatten() if has_tensor2 else None
-            primary_flat = flat1 if has_tensor1 else flat2
-            
-            end_idx = min(start_index + count, primary_flat.shape[0])
-            values1 = flat1[start_index:end_idx].tolist() if has_tensor1 else None
-            values2 = flat2[start_index:end_idx].tolist() if has_tensor2 else None
-            
-            # Calculate argmax of absolute differences if both tensors available
-            argmax_idx = None
-            if has_tensor1 and has_tensor2:
-                abs_diff = torch.abs(flat1 - flat2)
-                argmax_idx = int(torch.argmax(abs_diff).item())
-            
-            return jsonify({
-                'tensor1_values': values1,
-                'tensor2_values': values2,
-                'start_index': start_index,
-                'tensor_shape': list(primary_tensor.shape),
-                'display_type': 'multi-dimensional (flattened)',
-                'argmax_index': argmax_idx
-            })
-            
     except Exception as e:
         return jsonify({'error': f'Error extracting tensor values: {str(e)}'}), 400
 

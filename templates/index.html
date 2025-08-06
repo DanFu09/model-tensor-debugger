@@ -932,24 +932,18 @@
                                 ${match.match_type === 'both' ? `<button class="inspect-btn" onclick="jumpToMaxDiffInTensor(${match.match_index})" style="background-color: #dc3545; margin-left: 10px;">🎯 Jump to Max Diff</button>` : ''}
                                 <div class="values-container" id="values-${match.match_index}" style="display: none;">
                                     <div class="slice-controls">
+                                        <div id="dimension-controls-${match.match_index}"></div>
                                         <div class="slider-group">
-                                            <label for="start-slider-${match.match_index}">Start Index: <span id="start-value-${match.match_index}">0</span></label>
-                                            <input type="range" id="start-slider-${match.match_index}" min="0" max="1000" value="0" 
-                                                   oninput="updateSliderValue(${match.match_index}, 'start')" 
-                                                   onchange="updateTensorValues(${match.match_index})">
-                                        </div>
-                                        <div class="slider-group">
-                                            <label for="count-slider-${match.match_index}">Count: <span id="count-value-${match.match_index}">10</span></label>
+                                            <label for="count-slider-${match.match_index}">Values to Show: <span id="count-value-${match.match_index}">10</span></label>
                                             <input type="range" id="count-slider-${match.match_index}" min="1" max="100" value="10" 
                                                    oninput="updateSliderValue(${match.match_index}, 'count')" 
                                                    onchange="updateTensorValues(${match.match_index})">
                                         </div>
                                         <div class="manual-controls">
-                                            <input type="number" id="start-input-${match.match_index}" value="0" min="0" 
-                                                   onchange="syncSliderFromInput(${match.match_index}, 'start')" placeholder="Start">
                                             <input type="number" id="count-input-${match.match_index}" value="10" min="1" max="100" 
                                                    onchange="syncSliderFromInput(${match.match_index}, 'count')" placeholder="Count">
                                             <button onclick="updateTensorValues(${match.match_index})">Update</button>
+                                            <button onclick="resetDimensionSliders(${match.match_index})" style="background-color: #6c757d; margin-left: 10px;">Reset</button>
                                         </div>
                                     </div>
                                     <div id="tensor-display-${match.match_index}"></div>
@@ -983,10 +977,10 @@
         }
         
         async function initializeSliderRanges(matchIndex) {
-            // Get tensor shape to set appropriate slider max values
+            // Get the ACTUAL tensor shape after TP-aware reshaping from the backend
             if (globalMatches[matchIndex]) {
                 const match = globalMatches[matchIndex];
-                // Make a quick request to get tensor info
+                // Make a quick request to get the final tensor info after any reshaping
                 try {
                     const response = await fetch('/get_tensor_values', {
                         method: 'POST',
@@ -995,31 +989,111 @@
                         },
                         body: JSON.stringify({
                             match_index: matchIndex,
-                            start_index: 0,
-                            count: 1
+                            dimension_indices: [],
+                            count: 1,
+                            get_final_shape: true  // Request final shape after reshaping
                         }),
                     });
                     const result = await response.json();
                     
-                    if (!result.error) {
-                        const totalSize = result.tensor_shape.reduce((a, b) => a * b, 1);
-                        const startSlider = document.getElementById(`start-slider-${matchIndex}`);
-                        startSlider.max = Math.max(0, totalSize - 1);
+                    if (!result.error && result.tensor_shape) {
+                        // Use the final tensor shape from backend (after TP-aware reshaping)
+                        console.log(`Creating sliders for final shape: [${result.tensor_shape.join(', ')}]`);
+                        createDimensionSliders(matchIndex, result.tensor_shape, result.original_shapes);
+                    } else {
+                        // Fallback for scalar or error cases
+                        createDimensionSliders(matchIndex, result.tensor_shape || [], null);
                     }
                 } catch (error) {
                     console.log('Could not initialize slider range:', error);
+                    createDimensionSliders(matchIndex, [], null);
                 }
             }
         }
         
-        function updateSliderValue(matchIndex, type) {
-            if (type === 'start') {
-                const slider = document.getElementById(`start-slider-${matchIndex}`);
-                const valueSpan = document.getElementById(`start-value-${matchIndex}`);
-                const input = document.getElementById(`start-input-${matchIndex}`);
+        function createDimensionSliders(matchIndex, tensorShape, originalShapes) {
+            const dimensionContainer = document.getElementById(`dimension-controls-${matchIndex}`);
+            
+            if (tensorShape.length === 0) {
+                // Scalar tensor - no dimension sliders needed
+                dimensionContainer.innerHTML = '<p><em>Scalar value - no dimensions to slice</em></p>';
+                return;
+            }
+            
+            if (tensorShape.length === 1) {
+                // 1D tensor - single dimension slider
+                dimensionContainer.innerHTML = `
+                    <div class="slider-group">
+                        <label for="dim0-slider-${matchIndex}">Index (Dimension 0): <span id="dim0-value-${matchIndex}">0</span></label>
+                        <input type="range" id="dim0-slider-${matchIndex}" min="0" max="${tensorShape[0] - 1}" value="0" 
+                               oninput="updateDimensionSlider(${matchIndex}, 0)" 
+                               onchange="updateTensorValues(${matchIndex})">
+                    </div>
+                `;
+                return;
+            }
+            
+            // Multi-dimensional tensor - create sliders for the FINAL tensor shape
+            let slidersHTML = '<p><strong>Dimension Sliders (Final Shape):</strong></p>';
+            
+            // Show original shapes if available
+            if (originalShapes) {
+                slidersHTML += `<p><em>Original shapes: [${originalShapes.shape1.join(', ')}] vs [${originalShapes.shape2.join(', ')}] → Final: [${tensorShape.join(', ')}]</em></p>`;
+            }
+            
+            // Create sliders for each dimension of the final tensor shape
+            for (let i = 0; i < tensorShape.length; i++) {
+                const dimSize = tensorShape[i];
+                slidersHTML += `
+                    <div class="slider-group">
+                        <label for="dim${i}-slider-${matchIndex}">Dim ${i} (size ${dimSize}): <span id="dim${i}-value-${matchIndex}">0</span></label>
+                        <input type="range" id="dim${i}-slider-${matchIndex}" min="0" max="${dimSize - 1}" value="0" 
+                               oninput="updateDimensionSlider(${matchIndex}, ${i})" 
+                               onchange="updateTensorValues(${matchIndex})">
+                    </div>
+                `;
+            }
+            
+            dimensionContainer.innerHTML = slidersHTML;
+        }
+        
+        function updateDimensionSlider(matchIndex, dimensionIndex) {
+            const slider = document.getElementById(`dim${dimensionIndex}-slider-${matchIndex}`);
+            const valueSpan = document.getElementById(`dim${dimensionIndex}-value-${matchIndex}`);
+            
+            if (slider && valueSpan) {
                 valueSpan.textContent = slider.value;
-                input.value = slider.value;
-            } else if (type === 'count') {
+            }
+        }
+        
+        function getDimensionIndices(matchIndex) {
+            const indices = [];
+            const dimensionContainer = document.getElementById(`dimension-controls-${matchIndex}`);
+            const sliders = dimensionContainer.querySelectorAll('input[type="range"]');
+            
+            // Simply get the slider values in order - they now correspond directly to final tensor dimensions
+            sliders.forEach((slider, index) => {
+                const value = parseInt(slider.value) || 0;
+                indices.push(value);
+            });
+            
+            return indices;
+        }
+        
+        function resetDimensionSliders(matchIndex) {
+            const dimensionContainer = document.getElementById(`dimension-controls-${matchIndex}`);
+            const sliders = dimensionContainer.querySelectorAll('input[type="range"]');
+            
+            sliders.forEach((slider, index) => {
+                slider.value = 0;
+                updateDimensionSlider(matchIndex, index);
+            });
+            
+            updateTensorValues(matchIndex);
+        }
+        
+        function updateSliderValue(matchIndex, type) {
+            if (type === 'count') {
                 const slider = document.getElementById(`count-slider-${matchIndex}`);
                 const valueSpan = document.getElementById(`count-value-${matchIndex}`);
                 const input = document.getElementById(`count-input-${matchIndex}`);
@@ -1029,16 +1103,7 @@
         }
         
         function syncSliderFromInput(matchIndex, type) {
-            if (type === 'start') {
-                const input = document.getElementById(`start-input-${matchIndex}`);
-                const slider = document.getElementById(`start-slider-${matchIndex}`);
-                const valueSpan = document.getElementById(`start-value-${matchIndex}`);
-                const value = Math.max(0, parseInt(input.value) || 0);
-                slider.value = Math.min(value, parseInt(slider.max));
-                valueSpan.textContent = slider.value;
-                input.value = slider.value;
-                updateTensorValues(matchIndex);
-            } else if (type === 'count') {
+            if (type === 'count') {
                 const input = document.getElementById(`count-input-${matchIndex}`);
                 const slider = document.getElementById(`count-slider-${matchIndex}`);
                 const valueSpan = document.getElementById(`count-value-${matchIndex}`);
@@ -1051,11 +1116,10 @@
         }
         
         async function updateTensorValues(matchIndex) {
-            const startSlider = document.getElementById(`start-slider-${matchIndex}`);
             const countSlider = document.getElementById(`count-slider-${matchIndex}`);
             const displayDiv = document.getElementById(`tensor-display-${matchIndex}`);
             
-            const startIdx = parseInt(startSlider.value) || 0;
+            const dimensionIndices = getDimensionIndices(matchIndex);
             const count = parseInt(countSlider.value) || 10;
             
             displayDiv.innerHTML = '<div class="loading">Loading tensor values...</div>';
@@ -1068,7 +1132,7 @@
                     },
                     body: JSON.stringify({
                         match_index: matchIndex,
-                        start_index: startIdx,
+                        dimension_indices: dimensionIndices,
                         count: count
                     }),
                 });
@@ -1079,6 +1143,9 @@
                     displayDiv.innerHTML = `<div class="error">Error: ${result.error}</div>`;
                     return;
                 }
+                
+                // Initialize variables needed for display
+                const indexOffset = 0; // For tooltip indexing
                 
                 // Define color functions for all cases
                 const getBackgroundColor = (value, allValues = null) => {
@@ -1155,7 +1222,7 @@
                                         const borderColor = getBorderColor(diff, maxDiff);
                                         return `<div class="value-cell" 
                                                 style="background-color: ${bgColor}; border: 2px solid ${borderColor};" 
-                                                title="Index: ${startIdx + idx}, Value: ${val.toFixed(6)}, Diff: ${diff.toFixed(6)}">${val.toFixed(6)}</div>`;
+                                                title="Index: ${indexOffset + idx}, Value: ${val.toFixed(6)}, Diff: ${diff.toFixed(6)}">${val.toFixed(6)}</div>`;
                                     }).join('')}
                                 </div>
                             </div>
@@ -1168,7 +1235,7 @@
                                         const borderColor = getBorderColor(diff, maxDiff);
                                         return `<div class="value-cell" 
                                                 style="background-color: ${bgColor}; border: 2px solid ${borderColor};" 
-                                                title="Index: ${startIdx + idx}, Value: ${val.toFixed(6)}, Diff: ${diff.toFixed(6)}">${val.toFixed(6)}</div>`;
+                                                title="Index: ${indexOffset + idx}, Value: ${val.toFixed(6)}, Diff: ${diff.toFixed(6)}">${val.toFixed(6)}</div>`;
                                     }).join('')}
                                 </div>
                             </div>
@@ -1185,7 +1252,7 @@
                                         const bgColor = getBackgroundColor(val, result.tensor1_values);
                                         return `<div class="value-cell" 
                                                 style="background-color: ${bgColor}; border: 2px solid #90EE90;" 
-                                                title="Index: ${startIdx + idx}, Value: ${val.toFixed(6)}">${val.toFixed(6)}</div>`;
+                                                title="Index: ${indexOffset + idx}, Value: ${val.toFixed(6)}">${val.toFixed(6)}</div>`;
                                     }).join('')}
                                 </div>
                             </div>
@@ -1210,7 +1277,7 @@
                                         const bgColor = getBackgroundColor(val, result.tensor2_values);
                                         return `<div class="value-cell" 
                                                 style="background-color: ${bgColor}; border: 2px solid #90EE90;" 
-                                                title="Index: ${startIdx + idx}, Value: ${val.toFixed(6)}">${val.toFixed(6)}</div>`;
+                                                title="Index: ${indexOffset + idx}, Value: ${val.toFixed(6)}">${val.toFixed(6)}</div>`;
                                     }).join('')}
                                 </div>
                             </div>
@@ -1219,13 +1286,15 @@
                 }
                 
                 const valueCount = result.tensor1_values ? result.tensor1_values.length : result.tensor2_values.length;
+                const dimensionInfo = dimensionIndices.length > 0 ? `at indices [${dimensionIndices.join(', ')}]` : 'flattened view';
                 
                 displayDiv.innerHTML = `
                     ${tensorComparisonContent}
                     <div class="tensor-info-display">
                         <p><strong>Shape:</strong> [${result.tensor_shape.join(', ')}]</p>
                         <p><strong>Display Type:</strong> ${result.display_type}</p>
-                        <p><strong>Showing:</strong> indices ${startIdx} to ${startIdx + valueCount - 1}</p>
+                        <p><strong>Viewing:</strong> ${valueCount} values ${dimensionInfo}</p>
+                        ${result.slice_info ? `<p><strong>Slice Details:</strong> ${result.slice_info}</p>` : ''}
                     </div>
                 `;
                 
@@ -1241,7 +1310,7 @@
                 await showTensorValues(matchIndex);
             }
             
-            // Make a request to get the argmax index
+            // Make a request to get the argmax coordinates
             try {
                 const response = await fetch('/get_tensor_values', {
                     method: 'POST',
@@ -1250,8 +1319,9 @@
                     },
                     body: JSON.stringify({
                         match_index: matchIndex,
-                        start_index: 0,
-                        count: 1  // Just need the argmax, not the values
+                        dimension_indices: [],
+                        count: 1,
+                        get_argmax: true  // Request argmax coordinates
                     }),
                 });
                 
@@ -1262,29 +1332,25 @@
                     return;
                 }
                 
-                if (result.argmax_index === null || result.argmax_index === undefined) {
+                if (!result.argmax_coordinates || result.argmax_coordinates.length === 0) {
                     // No argmax available for this tensor (might be single-model or scalar)
+                    alert('No maximum difference location available for this tensor.');
                     return;
                 }
                 
-                const argmaxIndex = result.argmax_index;
+                const argmaxCoords = result.argmax_coordinates;
                 
-                // Update sliders to show the argmax position
-                const startSlider = document.getElementById(`start-slider-${matchIndex}`);
-                const countSlider = document.getElementById(`count-slider-${matchIndex}`);
-                const startInput = document.getElementById(`start-input-${matchIndex}`);
-                const countInput = document.getElementById(`count-input-${matchIndex}`);
-                const startValueSpan = document.getElementById(`start-value-${matchIndex}`);
-                const countValueSpan = document.getElementById(`count-value-${matchIndex}`);
+                // Update dimension sliders to show the argmax position
+                const dimensionContainer = document.getElementById(`dimension-controls-${matchIndex}`);
+                const sliders = dimensionContainer.querySelectorAll('input[type="range"]');
                 
-                // Set start index to center around the argmax (but not go negative)
-                const count = parseInt(countSlider.value) || 10;
-                const newStartIndex = Math.max(0, argmaxIndex - Math.floor(count / 2));
-                
-                // Update all slider elements
-                startSlider.value = newStartIndex;
-                startInput.value = newStartIndex;
-                startValueSpan.textContent = newStartIndex;
+                // Set each dimension slider to the argmax coordinate
+                sliders.forEach((slider, dimIndex) => {
+                    if (dimIndex < argmaxCoords.length) {
+                        slider.value = argmaxCoords[dimIndex];
+                        updateDimensionSlider(matchIndex, dimIndex);
+                    }
+                });
                 
                 // Update tensor values with the new position
                 await updateTensorValues(matchIndex);
@@ -1303,7 +1369,15 @@
                         displayDiv.style.border = '';
                     }, 3000);
                     
-                    // Jump completed silently
+                    // Show success message
+                    const coords = argmaxCoords.join(', ');
+                    const tempMessage = document.createElement('div');
+                    tempMessage.innerHTML = `<div style="background: #28a745; color: white; padding: 10px; border-radius: 5px; margin: 10px 0; text-align: center;">🎯 Jumped to max difference at coordinates [${coords}]</div>`;
+                    displayDiv.insertBefore(tempMessage, displayDiv.firstChild);
+                    
+                    setTimeout(() => {
+                        tempMessage.remove();
+                    }, 3000);
                 }
                 
             } catch (error) {

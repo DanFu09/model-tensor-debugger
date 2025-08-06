@@ -14,9 +14,13 @@ Get a glimpse of the intuitive interface that makes tensor debugging actually en
 The main interface features a floating header, drag-and-drop uploads, and expandable tensor comparisons:
 ![Header](screenshots/header.png)
 
-### ✅ Perfect Model Matches
-When your models are working correctly, you'll see beautiful green borders indicating minimal differences. The interface clearly shows tensor shapes, statistics, and provides easy navigation through your data:
-![Correct](screenshots/correct.png)
+### 🎛️ Multi-Dimensional Tensor Slicing
+Navigate through your tensors with precision! The interface creates individual sliders for each tensor dimension, allowing you to slice through 3D, 4D, or even higher-dimensional tensors. The sliders automatically adapt to your tensor shapes and handle TP-aware reshaping seamlessly:
+![Sliders](screenshots/sliders.png)
+
+### 📊 Comprehensive Summary Statistics
+Get instant statistical insights with detailed metrics comparing your models. The summary view shows means, standard deviations, differences, and cosine similarities at a glance, making it easy to spot patterns and anomalies:
+![Summary](screenshots/summary.png)
 
 ### 🚨 Debugging Mode: Finding the Problem
 When something's wrong, the tool lights up like a Christmas tree! Orange borders and color-coded values instantly highlight where your tensors diverge. The "Jump to Max Diff" feature takes you straight to the problematic values:
@@ -161,6 +165,12 @@ The app matches tensors based on the stage name (everything after the layer numb
   - Orange cells: Positive values (darker = larger magnitude)
   - Green borders: Low differences between models
   - Orange borders: High differences between models
+
+## Known Issues
+
+⚠️ **Multi-Dimensional Slicing After Reshaping**: When tensors require TP-aware reshaping (e.g., `[1, 8, 76, 64]` vs `[76, 8, 64]`), the multi-dimensional sliders may not work correctly and fall back to flattened view. See [`KNOWN_BUGS.md`](KNOWN_BUGS.md) for detailed information and planned fixes.
+
+For a complete list of known issues, workarounds, and planned fixes, please refer to [`KNOWN_BUGS.md`](KNOWN_BUGS.md).
 
 ## Technical Notes
 
