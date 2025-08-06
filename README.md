@@ -4,6 +4,19 @@ A local web application for debugging and comparing PyTorch tensor outputs betwe
 
 This whole app was built with Claude code in an evening!
 
+## Screenshots
+
+### Interface Overview
+![Header](screenshots/header.png)
+
+### Correct Model Comparison
+Shows matching tensors with minimal differences:
+![Correct](screenshots/correct.png)
+
+### Debugging Incorrect Values
+Highlights significant differences with color-coded visualization:
+![Incorrect](screenshots/incorrect.png)
+
 ## Features
 
 - **Drag & Drop Interface**: Upload .zip or .tar.gz archives containing PyTorch tensor files
