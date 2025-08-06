@@ -1,21 +1,28 @@
-# ML Model Tensor Debugger
+# 🔍 ML Model Tensor Debugger
 
-A local web application for debugging and comparing PyTorch tensor outputs between two ML models.
+🚀 **A powerful local web application for debugging and comparing PyTorch tensor outputs between two ML models.**
 
-This whole app was built with Claude code in an evening!
+Ever wondered why your model outputs don't match? Spent hours trying to figure out which tensor went wrong? This tool makes tensor debugging a breeze! 🌟
 
-## Screenshots
+✨ **This whole app was built with Claude Code in just one evening!** ⚡
 
-### Interface Overview
+## 📸 Screenshots
+
+Get a glimpse of the intuitive interface that makes tensor debugging actually enjoyable:
+
+### 🎯 Clean, Professional Interface
+The main interface features a floating header, drag-and-drop uploads, and expandable tensor comparisons:
 ![Header](screenshots/header.png)
 
-### Correct Model Comparison
-Shows matching tensors with minimal differences:
+### ✅ Perfect Model Matches
+When your models are working correctly, you'll see beautiful green borders indicating minimal differences. The interface clearly shows tensor shapes, statistics, and provides easy navigation through your data:
 ![Correct](screenshots/correct.png)
 
-### Debugging Incorrect Values
-Highlights significant differences with color-coded visualization:
+### 🚨 Debugging Mode: Finding the Problem
+When something's wrong, the tool lights up like a Christmas tree! Orange borders and color-coded values instantly highlight where your tensors diverge. The "Jump to Max Diff" feature takes you straight to the problematic values:
 ![Incorrect](screenshots/incorrect.png)
+
+*Notice how the interface makes it immediately obvious where the issues are - no more hunting through endless tensor dumps in your terminal!* 🎯
 
 ## Features
 
