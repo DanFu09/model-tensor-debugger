@@ -611,9 +611,108 @@ def upload_files():
         # Match tensors
         matches = match_tensors(model1_data, model2_data)
         
-        # Store matches globally for tensor inspection
+        # Store matches globally for tensor inspection with both original and reshaped tensors
         global stored_matches
-        stored_matches = matches
+        stored_matches = []
+        
+        for match in matches:
+            # Create a stored match with both original and potentially reshaped tensors
+            stored_match = match.copy()
+            
+            if match['tensor1'] is not None and match['tensor2'] is not None:
+                # Both tensors available - check if reshaping is needed
+                tensor1 = match['tensor1'].cpu() if hasattr(match['tensor1'], 'cpu') else match['tensor1']
+                tensor2 = match['tensor2'].cpu() if hasattr(match['tensor2'], 'cpu') else match['tensor2']
+                
+                # Handle scalar values - they don't have shapes
+                has_shape1 = hasattr(tensor1, 'shape')
+                has_shape2 = hasattr(tensor2, 'shape')
+                
+                if not has_shape1 or not has_shape2:
+                    # At least one is a scalar - no reshaping needed
+                    original_shape1 = list(tensor1.shape) if has_shape1 else []
+                    original_shape2 = list(tensor2.shape) if has_shape2 else []
+                    
+                    stored_match.update({
+                        'original_tensor1': tensor1,
+                        'original_tensor2': tensor2,
+                        'tensor1': tensor1,
+                        'tensor2': tensor2,
+                        'reshape_applied': False,
+                        'original_shapes': [original_shape1, original_shape2],
+                        'final_shape': original_shape1 if has_shape1 else original_shape2
+                    })
+                else:
+                    # Both have shapes - proceed with normal tensor processing
+                    original_shape1 = list(tensor1.shape)
+                    original_shape2 = list(tensor2.shape)
+                
+                    if tensor1.shape != tensor2.shape:
+                        try:
+                            # Apply TP-aware reshaping during upload phase
+                            reshaped_tensor1, reshaped_tensor2 = smart_reshape_for_tp(tensor1, tensor2)
+                            print(f"  Stored reshaped tensors for {match['model1_file']} and {match['model2_file']}")
+                            print(f"  Original shapes: {original_shape1} vs {original_shape2} → Final: {list(reshaped_tensor1.shape)}")
+                            
+                            stored_match.update({
+                                'original_tensor1': tensor1,
+                                'original_tensor2': tensor2,
+                                'tensor1': reshaped_tensor1,  # Use reshaped versions for slicing
+                                'tensor2': reshaped_tensor2,
+                                'reshape_applied': True,
+                                'original_shapes': [original_shape1, original_shape2],
+                                'final_shape': list(reshaped_tensor1.shape)
+                            })
+                        except Exception as e:
+                            print(f"  Could not reshape tensors during upload for {match['model1_file']}: {e}")
+                            stored_match.update({
+                                'original_tensor1': tensor1,
+                                'original_tensor2': tensor2,
+                                'tensor1': tensor1,
+                                'tensor2': tensor2,
+                                'reshape_applied': False,
+                                'original_shapes': [original_shape1, original_shape2],
+                                'final_shape': None
+                            })
+                    else:
+                        # Shapes already match - no reshaping needed
+                        stored_match.update({
+                            'original_tensor1': tensor1,
+                            'original_tensor2': tensor2,
+                            'tensor1': tensor1,
+                            'tensor2': tensor2,
+                            'reshape_applied': False,
+                            'original_shapes': [original_shape1, original_shape2],
+                            'final_shape': list(tensor1.shape)
+                        })
+            else:
+                # Only one tensor available - no reshaping needed
+                if match['tensor1'] is not None:
+                    tensor1 = match['tensor1'].cpu() if hasattr(match['tensor1'], 'cpu') else match['tensor1']
+                    shape1 = list(tensor1.shape) if hasattr(tensor1, 'shape') else []
+                    stored_match.update({
+                        'original_tensor1': tensor1,
+                        'original_tensor2': None,
+                        'tensor1': tensor1,
+                        'tensor2': None,
+                        'reshape_applied': False,
+                        'original_shapes': [shape1, None],
+                        'final_shape': shape1
+                    })
+                elif match['tensor2'] is not None:
+                    tensor2 = match['tensor2'].cpu() if hasattr(match['tensor2'], 'cpu') else match['tensor2']
+                    shape2 = list(tensor2.shape) if hasattr(tensor2, 'shape') else []
+                    stored_match.update({
+                        'original_tensor1': None,
+                        'original_tensor2': tensor2,
+                        'tensor1': None,
+                        'tensor2': tensor2,
+                        'reshape_applied': False,
+                        'original_shapes': [None, shape2],
+                        'final_shape': shape2
+                    })
+            
+            stored_matches.append(stored_match)
         
         # Remove tensors from response for performance
         matches_for_response = []
@@ -660,30 +759,28 @@ def get_tensor_values():
         has_tensor1 = tensor1 is not None
         has_tensor2 = tensor2 is not None
         
-        # Store original shapes before any reshaping
-        original_shapes = None
-        if has_tensor1 and has_tensor2:
-            original_shape1 = list(tensor1.shape)
-            original_shape2 = list(tensor2.shape)
-            original_shapes = {
-                'shape1': original_shape1,
-                'shape2': original_shape2
-            }
+        # Get reshape information from stored match
+        original_shapes = match.get('original_shapes')
+        reshape_applied = match.get('reshape_applied', False)
+        final_shape = match.get('final_shape')
         
-        # Ensure tensors are on CPU before any operations
+        # Use the pre-reshaped tensors stored during upload phase
+        # No additional reshaping is done here - tensors should already be compatible
+        
+        # Ensure tensors are on CPU (they should already be from upload phase)
         if has_tensor1 and hasattr(tensor1, 'cpu'):
             tensor1 = tensor1.cpu()
         if has_tensor2 and hasattr(tensor2, 'cpu'):
             tensor2 = tensor2.cpu()
         
-        # Apply TP-aware reshaping if both tensors available and shapes differ
-        if has_tensor1 and has_tensor2 and tensor1.shape != tensor2.shape:
-            try:
-                tensor1, tensor2 = smart_reshape_for_tp(tensor1, tensor2)
-                print(f"  Reshaped tensors for value display: {match['model1_file']} and {match['model2_file']}")
-                print(f"  Original shapes: {original_shapes['shape1']} vs {original_shapes['shape2']} → Final: {list(tensor1.shape)}")
-            except Exception as e:
-                print(f"  Could not reshape tensors for value display: {e}")
+        if reshape_applied and original_shapes:
+            print(f"  Using pre-reshaped tensors for {match.get('model1_file', 'tensor1')} and {match.get('model2_file', 'tensor2')}")
+            print(f"  Original shapes: {original_shapes[0]} vs {original_shapes[1]} → Final: {final_shape}")
+            # Convert original_shapes to the format expected by the rest of the function
+            original_shapes = {
+                'shape1': original_shapes[0] if original_shapes[0] else [],
+                'shape2': original_shapes[1] if original_shapes[1] else []
+            }
         
         # Use the available tensor to determine shape and processing
         primary_tensor = tensor1 if has_tensor1 else tensor2
@@ -830,6 +927,225 @@ def get_tensor_values():
         
     except Exception as e:
         return jsonify({'error': f'Error extracting tensor values: {str(e)}'}), 400
+
+@app.route('/get_tensor_shapes', methods=['POST'])
+def get_tensor_shapes():
+    """Get original tensor shapes before any reshaping for manual dimension mapping"""
+    data = request.json
+    match_index = data.get('match_index', 0)
+    
+    if match_index >= len(stored_matches):
+        return jsonify({'error': 'Invalid match index'}), 400
+    
+    match = stored_matches[match_index]
+    
+    try:
+        result = {}
+        
+        # Get original shapes from stored match metadata
+        original_shapes = match.get('original_shapes', [None, None])
+        
+        if match.get('tensor1') is not None:
+            # Use original tensor shape, not reshaped
+            original_tensor1 = match.get('original_tensor1', match['tensor1'])
+            if hasattr(original_tensor1, 'shape'):
+                result['tensor1_shape'] = list(original_tensor1.shape)
+                result['tensor1_name'] = match.get('model1_file', 'Model 1')
+            else:
+                result['tensor1_shape'] = []  # Scalar
+                result['tensor1_name'] = match.get('model1_file', 'Model 1 (Scalar)')
+                
+        if match.get('tensor2') is not None:
+            # Use original tensor shape, not reshaped
+            original_tensor2 = match.get('original_tensor2', match['tensor2'])
+            if hasattr(original_tensor2, 'shape'):
+                result['tensor2_shape'] = list(original_tensor2.shape)
+                result['tensor2_name'] = match.get('model2_file', 'Model 2')
+            else:
+                result['tensor2_shape'] = []  # Scalar
+                result['tensor2_name'] = match.get('model2_file', 'Model 2 (Scalar)')
+                
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': f'Error getting tensor shapes: {str(e)}'}), 400
+
+@app.route('/get_tensor_values_manual', methods=['POST'])
+def get_tensor_values_manual():
+    """Get tensor values using manual dimension mapping"""
+    data = request.json
+    match_index = data.get('match_index', 0)
+    tensor1_indices = data.get('tensor1_indices', [])
+    tensor2_indices = data.get('tensor2_indices', [])
+    count = data.get('count', 10)
+    
+    if match_index >= len(stored_matches):
+        return jsonify({'error': 'Invalid match index'}), 400
+    
+    match = stored_matches[match_index]
+    
+    try:
+        # Use ORIGINAL tensors before any reshaping
+        tensor1 = match.get('original_tensor1')
+        tensor2 = match.get('original_tensor2')
+        
+        result = {}
+        sliced_tensor1 = None
+        sliced_tensor2 = None
+        
+        # Process tensor 1
+        if tensor1 is not None:
+            if hasattr(tensor1, 'shape') and len(tensor1.shape) > 0:
+                # Apply manual slicing to tensor 1
+                sliced_tensor1, slice_info1 = slice_tensor_manually(tensor1, tensor1_indices, count)
+                result['tensor1_values'] = sliced_tensor1.tolist()
+                result['tensor1_slice_info'] = slice_info1
+            else:
+                # Scalar tensor
+                result['tensor1_values'] = [float(tensor1)]
+                result['tensor1_slice_info'] = 'scalar'
+                sliced_tensor1 = torch.tensor([float(tensor1)])
+        
+        # Process tensor 2
+        if tensor2 is not None:
+            if hasattr(tensor2, 'shape') and len(tensor2.shape) > 0:
+                # Apply manual slicing to tensor 2
+                sliced_tensor2, slice_info2 = slice_tensor_manually(tensor2, tensor2_indices, count)
+                result['tensor2_values'] = sliced_tensor2.tolist()
+                result['tensor2_slice_info'] = slice_info2
+            else:
+                # Scalar tensor
+                result['tensor2_values'] = [float(tensor2)]
+                result['tensor2_slice_info'] = 'scalar'
+                sliced_tensor2 = torch.tensor([float(tensor2)])
+        
+        # Calculate summary statistics for the sliced tensors
+        if sliced_tensor1 is not None and sliced_tensor2 is not None:
+            try:
+                # Ensure both slices are tensors and have the same shape
+                if not isinstance(sliced_tensor1, torch.Tensor):
+                    sliced_tensor1 = torch.tensor(sliced_tensor1)
+                if not isinstance(sliced_tensor2, torch.Tensor):
+                    sliced_tensor2 = torch.tensor(sliced_tensor2)
+                
+                # Flatten both to 1D for comparison if they have different shapes
+                if sliced_tensor1.shape != sliced_tensor2.shape:
+                    min_elements = min(sliced_tensor1.numel(), sliced_tensor2.numel())
+                    sliced_tensor1 = sliced_tensor1.flatten()[:min_elements]
+                    sliced_tensor2 = sliced_tensor2.flatten()[:min_elements]
+                
+                # Calculate difference statistics
+                diff = sliced_tensor1 - sliced_tensor2
+                abs_diff = torch.abs(diff)
+                
+                # Calculate statistics with NaN handling
+                abs_diff_mean = abs_diff.mean().item()
+                abs_diff_max = abs_diff.max().item()
+                rel_diff_mean = (abs_diff / (torch.abs(sliced_tensor1) + 1e-8)).mean().item()
+                mse = torch.mean(diff**2).item()
+                
+                # Calculate cosine similarity if both tensors have non-zero magnitude
+                tensor1_flat = sliced_tensor1.flatten()
+                tensor2_flat = sliced_tensor2.flatten()
+                if tensor1_flat.norm() > 1e-8 and tensor2_flat.norm() > 1e-8:
+                    cosine_sim = torch.nn.functional.cosine_similarity(
+                        tensor1_flat.unsqueeze(0), tensor2_flat.unsqueeze(0), dim=1).item()
+                else:
+                    cosine_sim = 1.0 if torch.allclose(tensor1_flat, tensor2_flat, atol=1e-8) else 0.0
+                
+                # Replace NaN values with safe defaults
+                abs_diff_mean = 0.0 if not torch.isfinite(torch.tensor(abs_diff_mean)) else abs_diff_mean
+                abs_diff_max = 0.0 if not torch.isfinite(torch.tensor(abs_diff_max)) else abs_diff_max
+                rel_diff_mean = 0.0 if not torch.isfinite(torch.tensor(rel_diff_mean)) else rel_diff_mean
+                mse = 0.0 if not torch.isfinite(torch.tensor(mse)) else mse
+                cosine_sim = 1.0 if not torch.isfinite(torch.tensor(cosine_sim)) else cosine_sim
+                
+                # Calculate individual tensor statistics
+                tensor1_mean = sliced_tensor1.mean().item()
+                tensor1_std = sliced_tensor1.std().item()
+                tensor1_min = sliced_tensor1.min().item()
+                tensor1_max = sliced_tensor1.max().item()
+                
+                tensor2_mean = sliced_tensor2.mean().item()
+                tensor2_std = sliced_tensor2.std().item()
+                tensor2_min = sliced_tensor2.min().item()
+                tensor2_max = sliced_tensor2.max().item()
+                
+                result['summary_stats'] = {
+                    'tensor1_stats': {
+                        'mean': tensor1_mean,
+                        'std': tensor1_std,
+                        'min': tensor1_min,
+                        'max': tensor1_max
+                    },
+                    'tensor2_stats': {
+                        'mean': tensor2_mean,
+                        'std': tensor2_std,
+                        'min': tensor2_min,
+                        'max': tensor2_max
+                    },
+                    'difference_stats': {
+                        'abs_diff_mean': abs_diff_mean,
+                        'abs_diff_max': abs_diff_max,
+                        'rel_diff_mean': rel_diff_mean,
+                        'mse': mse,
+                        'cosine_sim': cosine_sim
+                    },
+                    'comparison_info': {
+                        'elements_compared': min(sliced_tensor1.numel(), sliced_tensor2.numel()),
+                        'shapes_match': sliced_tensor1.shape == sliced_tensor2.shape,
+                        'values_identical': abs_diff_max < 1e-6
+                    }
+                }
+                
+            except Exception as stats_error:
+                print(f"Error calculating summary statistics: {stats_error}")
+                result['summary_stats'] = {'error': f'Could not calculate statistics: {str(stats_error)}'}
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': f'Error with manual tensor slicing: {str(e)}'}), 400
+
+def slice_tensor_manually(tensor, indices, count):
+    """Apply manual slicing to a tensor with specific dimension indices"""
+    # Ensure tensor is on CPU
+    tensor = tensor.cpu() if hasattr(tensor, 'cpu') else tensor
+    
+    if len(indices) == 0:
+        # No indices provided, return flattened view
+        flat_tensor = tensor.flatten()
+        end_idx = min(count, flat_tensor.shape[0])
+        return flat_tensor[:end_idx], f'flattened[0:{end_idx}]'
+    
+    if len(indices) != len(tensor.shape):
+        return tensor.flatten()[:count], 'fallback_flattened'
+    
+    # Build slice objects for each dimension
+    slices = []
+    slice_parts = []
+    
+    for i, idx in enumerate(indices):
+        dim_size = tensor.shape[i]
+        idx = max(0, min(idx, dim_size - 1))  # Clamp to valid range
+        
+        if i == len(indices) - 1:
+            # Last dimension - slice a range of values
+            start_idx = idx
+            end_idx = min(start_idx + count, dim_size)
+            slices.append(slice(start_idx, end_idx))
+            slice_parts.append(f'dim{i}[{start_idx}:{end_idx}]')
+        else:
+            # Other dimensions - use specific index
+            slices.append(idx)
+            slice_parts.append(f'dim{i}[{idx}]')
+    
+    # Apply the slicing
+    slice_tuple = tuple(slices)
+    sliced_tensor = tensor[slice_tuple]
+    slice_info = ' × '.join(slice_parts)
+    
+    return sliced_tensor, slice_info
 
 if __name__ == '__main__':
     app.run(debug=True, host='127.0.0.1', port=5000)

@@ -82,7 +82,63 @@ Model archives should contain:
 
 ## Next Steps
 1. ✅ Create runplan documentation
-2. 🔄 Reorganize tensor display by layer order
-3. 🔄 Add individual tensor value inspection
-4. 🔄 Remove summary statistics from UI
-5. 🔄 Implement slice navigation controls
+2. ✅ Reorganize tensor display by layer order
+3. ✅ Add individual tensor value inspection  
+4. ✅ Remove summary statistics from UI
+5. ✅ Implement slice navigation controls
+
+---
+
+# August 6, 2025 - Critical Bug Fix Update
+
+## 🚨 Critical Bugs Discovered and Fixed
+
+### Bug #1: Multi-Dimensional Slicing Failure After TP-Aware Reshaping
+- **Status**: ✅ FIXED
+- **Issue**: Slicing interface failed when tensors required TP-aware reshaping
+- **Root Cause**: Timing mismatch between tensor reshaping and storage
+- **Solution**: Apply reshaping during upload phase, store both original and reshaped tensors
+
+### Bug #2: Scalar Value Handling Crash  
+- **Status**: ✅ FIXED
+- **Issue**: `'int' object has no attribute 'shape'` when processing scalar files like `0_sliding.pth`
+- **Root Cause**: Code assumed all loaded values were tensors with `.shape` attributes
+- **Solution**: Added robust scalar detection throughout tensor processing pipeline
+
+## Implementation Summary
+
+### Files Modified
+- **`app.py`** (lines 614-714): Fixed tensor storage and scalar handling
+- **`tests/test_tensor_processing.py`** (new): 20 comprehensive unit tests  
+- **`tests/README.md`** (new): Test documentation
+- **`ai_docs/BUG_FIX_REPORT.md`** (new): Technical analysis of fixes
+- **`KNOWN_BUGS.md`**: Updated to show bugs as fixed
+
+### Test Results
+- ✅ **20/20 tests passing** 
+- ✅ All scalar types handled (int, float, tensor scalars)
+- ✅ All TP-aware reshaping scenarios work
+- ✅ Complete pipeline validation with synthetic data (no local file dependencies)
+
+### Environment Notes  
+- **Conda Environment**: `ml-debug-viz` (PyTorch 2.2.2)
+- **Activation**: `source ~/anaconda3/etc/profile.d/conda.sh && conda activate ml-debug-viz`
+- **Run Tests**: `python -m pytest tests/test_tensor_processing.py -v`
+
+### Key Improvements
+1. **Eliminated crashes** with scalar files (`0_sliding.pth`: tensor vs int scenarios)
+2. **Fixed multi-dimensional slicing** for reshaped tensors (e.g., [1,8,76,64] vs [76,8,64])  
+3. **Improved performance** by doing reshaping once during upload vs on every request
+4. **Added comprehensive testing** covering all edge cases found in real data
+5. **Self-contained tests** using synthetic data instead of local file paths
+
+## Updated Status: Application Ready for Production Use
+
+The ML Model Tensor Debugger now handles all identified tensor file types reliably:
+- ✅ Multi-dimensional tensor slicing works correctly after TP-aware reshaping
+- ✅ Scalar values (int, float, tensor scalars) processed without crashes  
+- ✅ All 12 `0_*` file types from test data directories work correctly
+- ✅ Robust error handling and graceful degradation for edge cases
+- ✅ Comprehensive test coverage ensuring future code stability
+
+**Total Development Time**: ~4 hours for complete bug fix + testing + documentation

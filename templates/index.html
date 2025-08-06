@@ -768,6 +768,30 @@
                     
                     if (match.match_type === 'both' && match.diff_stats && !match.diff_stats.error) {
                         if (match.diff_stats.shape_match) {
+                            // Check if this looks like a potential manual mapping case
+                            let manualMappingHint = '';
+                            if (match.model1_data && match.model2_data) {
+                                const shape1 = match.model1_data.shape;
+                                const shape2 = match.model2_data.shape;
+                                const elements1 = shape1.reduce((a, b) => a * b, 1);
+                                const elements2 = shape2.reduce((a, b) => a * b, 1);
+                                
+                                // Check if shapes are very different but same elements AND poor similarity
+                                const shapesDifferent = JSON.stringify(shape1) !== JSON.stringify(shape2);
+                                const poorSimilarity = match.diff_stats.cosine_sim < 0.5;
+                                const highDifference = match.diff_stats.abs_diff_max > 1.0;
+                                
+                                if (elements1 === elements2 && shapesDifferent && (poorSimilarity || highDifference)) {
+                                    manualMappingHint = `
+                                        <div style="margin-top: 10px; padding: 8px; background-color: #e3f2fd; border-radius: 4px; color: #1565c0; border-left: 4px solid #2196f3;">
+                                            💡 <strong>Manual Mapping Recommended:</strong> These tensors have identical element counts (${elements1}) but very different shapes and poor similarity. 
+                                            The automatic reshaping may not be finding the correct alignment. 
+                                            <strong>Try "🔧 Manual Mapping"</strong> to manually explore dimension combinations!
+                                        </div>
+                                    `;
+                                }
+                            }
+                            
                             summaryContent = `
                                 <div class="summary-stats">
                                     <h5>Summary Statistics</h5>
@@ -797,6 +821,7 @@
                                             <span class="stat-value">${match.diff_stats.cosine_sim.toFixed(6)}</span>
                                         </div>
                                     </div>
+                                    ${manualMappingHint}
                                 </div>
                             `;
                         } else {
@@ -860,9 +885,31 @@
                             </div>
                         `;
                     } else if (match.diff_stats && match.diff_stats.error) {
+                        // Check if this might be a reshapeable tensor case
+                        const hasReshapeHint = match.diff_stats.error && match.diff_stats.error.includes('reshape');
+                        let reshapeHintText = '';
+                        
+                        if (hasReshapeHint && match.model1_data && match.model2_data) {
+                            const shape1 = match.model1_data.shape;
+                            const shape2 = match.model2_data.shape;
+                            const elements1 = shape1.reduce((a, b) => a * b, 1);
+                            const elements2 = shape2.reduce((a, b) => a * b, 1);
+                            
+                            if (elements1 === elements2) {
+                                reshapeHintText = `
+                                    <div style="margin-top: 10px; padding: 8px; background-color: #e3f2fd; border-radius: 4px; color: #1565c0; border-left: 4px solid #2196f3;">
+                                        💡 <strong>Tip:</strong> These tensors have the same number of elements (${elements1}) but different shapes. 
+                                        They might contain identical data arranged differently. 
+                                        <strong>Try "🔧 Manual Mapping"</strong> to explore different dimension combinations!
+                                    </div>
+                                `;
+                            }
+                        }
+                        
                         summaryContent = `
                             <div class="summary-stats error">
                                 <strong>Error:</strong> ${match.diff_stats.error}
+                                ${reshapeHintText}
                             </div>
                         `;
                     }
@@ -930,8 +977,20 @@
                                     Inspect Raw Tensor Values
                                 </button>
                                 ${match.match_type === 'both' ? `<button class="inspect-btn" onclick="jumpToMaxDiffInTensor(${match.match_index})" style="background-color: #dc3545; margin-left: 10px;">🎯 Jump to Max Diff</button>` : ''}
+                                ${match.match_type === 'both' ? `<button class="inspect-btn" onclick="quickManualMapping(${match.match_index})" style="background-color: #17a2b8; margin-left: 10px;">🔧 Manual Mapping</button>` : ''}
                                 <div class="values-container" id="values-${match.match_index}" style="display: none;">
-                                    <div class="slice-controls">
+                                    
+                                    <!-- Dimension Mapping Controls -->
+                                    <div class="dimension-mapping" id="dimension-mapping-${match.match_index}" style="display: none; margin-bottom: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 5px;">
+                                        <h4>Manual Dimension Mapping</h4>
+                                        <p>Control which dimensions to slice for each tensor independently:</p>
+                                        <div id="mapping-controls-${match.match_index}"></div>
+                                        <button onclick="applyDimensionMapping(${match.match_index})" style="margin-top: 10px; background-color: #28a745;">Apply Mapping</button>
+                                        <button onclick="toggleMappingMode(${match.match_index})" style="margin-top: 10px; margin-left: 10px; background-color: #6c757d;">Switch to Auto Mode</button>
+                                    </div>
+                                    
+                                    <!-- Original slice controls -->
+                                    <div class="slice-controls" id="auto-controls-${match.match_index}">
                                         <div id="dimension-controls-${match.match_index}"></div>
                                         <div class="slider-group">
                                             <label for="count-slider-${match.match_index}">Values to Show: <span id="count-value-${match.match_index}">10</span></label>
@@ -944,6 +1003,7 @@
                                                    onchange="syncSliderFromInput(${match.match_index}, 'count')" placeholder="Count">
                                             <button onclick="updateTensorValues(${match.match_index})">Update</button>
                                             <button onclick="resetDimensionSliders(${match.match_index})" style="background-color: #6c757d; margin-left: 10px;">Reset</button>
+                                            <button onclick="toggleMappingMode(${match.match_index})" style="background-color: #007bff; margin-left: 10px;">Manual Mapping</button>
                                         </div>
                                     </div>
                                     <div id="tensor-display-${match.match_index}"></div>
@@ -1403,6 +1463,646 @@
             const matchItem = document.querySelector(`[data-match-index="${matchIndex}"]`);
             if (matchItem) {
                 matchItem.classList.toggle('collapsed');
+            }
+        }
+        
+        // Manual dimension mapping functions
+        let mappingMode = {}; // Track mapping mode per match
+        let originalShapes = {}; // Store original shapes per match
+        
+        function toggleMappingMode(matchIndex) {
+            const mappingDiv = document.getElementById(`dimension-mapping-${matchIndex}`);
+            const autoDiv = document.getElementById(`auto-controls-${matchIndex}`);
+            
+            if (!mappingMode[matchIndex]) {
+                // Switch to manual mapping mode
+                mappingDiv.style.display = 'block';
+                autoDiv.style.display = 'none';
+                mappingMode[matchIndex] = true;
+                initializeDimensionMapping(matchIndex);
+            } else {
+                // Switch to auto mode
+                mappingDiv.style.display = 'none';
+                autoDiv.style.display = 'block';
+                mappingMode[matchIndex] = false;
+            }
+        }
+        
+        async function initializeDimensionMapping(matchIndex) {
+            const mappingContainer = document.getElementById(`mapping-controls-${matchIndex}`);
+            
+            try {
+                // Get original tensor shapes before any reshaping
+                const response = await fetch('/get_tensor_shapes', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        match_index: matchIndex
+                    }),
+                });
+                const result = await response.json();
+                
+                if (result.error) {
+                    mappingContainer.innerHTML = `<p>Error: ${result.error}</p>`;
+                    return;
+                }
+                
+                // Store for later use
+                originalShapes[matchIndex] = result;
+                
+                let mappingHTML = '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">';
+                
+                // Tensor 1 controls
+                if (result.tensor1_shape) {
+                    mappingHTML += `
+                        <div>
+                            <h5>Tensor 1 (${result.tensor1_name || 'Model 1'})</h5>
+                            <p><em>Original shape: [${result.tensor1_shape.join(', ')}]</em></p>
+                            ${createTensorMappingControls(matchIndex, 1, result.tensor1_shape)}
+                        </div>
+                    `;
+                }
+                
+                // Tensor 2 controls
+                if (result.tensor2_shape) {
+                    mappingHTML += `
+                        <div>
+                            <h5>Tensor 2 (${result.tensor2_name || 'Model 2'})</h5>
+                            <p><em>Original shape: [${result.tensor2_shape.join(', ')}]</em></p>
+                            ${createTensorMappingControls(matchIndex, 2, result.tensor2_shape)}
+                        </div>
+                    `;
+                }
+                
+                mappingHTML += '</div>';
+                
+                // Add values to show control and convenience buttons
+                mappingHTML += `
+                    <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;">
+                        <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <label for="manual-count-slider-${matchIndex}" style="font-weight: bold;">
+                                    Values to Show: <span id="manual-count-value-${matchIndex}">10</span>
+                                </label>
+                                <input type="range" 
+                                       id="manual-count-slider-${matchIndex}" 
+                                       min="1" 
+                                       max="100" 
+                                       value="10" 
+                                       style="width: 120px;"
+                                       oninput="updateManualCountSlider(${matchIndex})"
+                                       onchange="updateManualCountSlider(${matchIndex})">
+                                <input type="number" 
+                                       id="manual-count-input-${matchIndex}" 
+                                       value="10" 
+                                       min="1" 
+                                       max="100" 
+                                       style="width: 50px;"
+                                       onchange="syncManualCountFromInput(${matchIndex})">
+                            </div>
+                            <div>
+                                <label>
+                                    <input type="checkbox" id="auto-update-${matchIndex}" checked onchange="toggleAutoUpdate(${matchIndex})"> 
+                                    Auto-update on slider change
+                                </label>
+                            </div>
+                        </div>
+                        <div style="margin-top: 10px;">
+                            <button onclick="resetManualSliders(${matchIndex})" style="background-color: #6c757d; margin-right: 10px;">Reset All to 0</button>
+                            <button onclick="copyTensor1ToTensor2(${matchIndex})" style="background-color: #17a2b8; margin-right: 10px;">Copy T1→T2 Settings</button>
+                            ${result.tensor1_shape && result.tensor2_shape ? `<button onclick="tryCommonMappings(${matchIndex})" style="background-color: #ffc107; color: black;">Try Common Mappings</button>` : ''}
+                        </div>
+                    </div>
+                `;
+                
+                mappingContainer.innerHTML = mappingHTML;
+                
+            } catch (error) {
+                console.error('Error initializing dimension mapping:', error);
+                mappingContainer.innerHTML = `<p>Error loading tensor shapes: ${error.message}</p>`;
+            }
+        }
+        
+        function createTensorMappingControls(matchIndex, tensorNum, shape) {
+            let html = '';
+            
+            for (let i = 0; i < shape.length; i++) {
+                html += `
+                    <div style="margin-bottom: 12px;">
+                        <label style="display: block; font-weight: bold; margin-bottom: 4px;">
+                            Dim ${i} (size ${shape[i]}): <span id="t${tensorNum}-dim${i}-value-${matchIndex}">0</span>
+                        </label>
+                        <input type="range" 
+                               id="t${tensorNum}-dim${i}-slider-${matchIndex}" 
+                               min="0" 
+                               max="${shape[i] - 1}" 
+                               value="0" 
+                               style="width: 200px; margin-right: 10px;"
+                               oninput="updateManualSlider(${matchIndex}, ${tensorNum}, ${i})"
+                               onchange="updateManualSlider(${matchIndex}, ${tensorNum}, ${i})">
+                        <input type="number" 
+                               id="t${tensorNum}-dim${i}-input-${matchIndex}" 
+                               value="0" 
+                               min="0" 
+                               max="${shape[i] - 1}" 
+                               style="width: 50px; margin-left: 5px;"
+                               onchange="syncManualSliderFromInput(${matchIndex}, ${tensorNum}, ${i})">
+                        <span style="font-size: 12px; color: #666; margin-left: 5px;">(0-${shape[i] - 1})</span>
+                    </div>
+                `;
+            }
+            
+            return html;
+        }
+        
+        function updateManualSlider(matchIndex, tensorNum, dimIndex) {
+            const slider = document.getElementById(`t${tensorNum}-dim${dimIndex}-slider-${matchIndex}`);
+            const valueSpan = document.getElementById(`t${tensorNum}-dim${dimIndex}-value-${matchIndex}`);
+            const input = document.getElementById(`t${tensorNum}-dim${dimIndex}-input-${matchIndex}`);
+            
+            if (slider && valueSpan && input) {
+                const value = slider.value;
+                valueSpan.textContent = value;
+                input.value = value;
+                
+                // Auto-update if enabled
+                const autoUpdateCheckbox = document.getElementById(`auto-update-${matchIndex}`);
+                if (autoUpdateCheckbox && autoUpdateCheckbox.checked) {
+                    // Debounce the auto-update to avoid too many requests
+                    clearTimeout(window[`autoUpdateTimer_${matchIndex}`]);
+                    window[`autoUpdateTimer_${matchIndex}`] = setTimeout(() => {
+                        applyDimensionMapping(matchIndex);
+                    }, 500); // 500ms delay
+                }
+            }
+        }
+        
+        function syncManualSliderFromInput(matchIndex, tensorNum, dimIndex) {
+            const slider = document.getElementById(`t${tensorNum}-dim${dimIndex}-slider-${matchIndex}`);
+            const valueSpan = document.getElementById(`t${tensorNum}-dim${dimIndex}-value-${matchIndex}`);
+            const input = document.getElementById(`t${tensorNum}-dim${dimIndex}-input-${matchIndex}`);
+            
+            if (slider && valueSpan && input) {
+                let value = parseInt(input.value) || 0;
+                const max = parseInt(slider.max);
+                const min = parseInt(slider.min);
+                
+                // Clamp value to slider range
+                value = Math.max(min, Math.min(max, value));
+                
+                slider.value = value;
+                valueSpan.textContent = value;
+                input.value = value; // Update input in case it was clamped
+            }
+        }
+        
+        async function applyDimensionMapping(matchIndex) {
+            const shapes = originalShapes[matchIndex];
+            if (!shapes) {
+                alert('Tensor shapes not loaded. Please try again.');
+                return;
+            }
+            
+            // Collect dimension indices for both tensors
+            const tensor1_indices = [];
+            const tensor2_indices = [];
+            
+            if (shapes.tensor1_shape) {
+                for (let i = 0; i < shapes.tensor1_shape.length; i++) {
+                    const slider = document.getElementById(`t1-dim${i}-slider-${matchIndex}`);
+                    if (slider) {
+                        tensor1_indices.push(parseInt(slider.value) || 0);
+                    }
+                }
+            }
+            
+            if (shapes.tensor2_shape) {
+                for (let i = 0; i < shapes.tensor2_shape.length; i++) {
+                    const slider = document.getElementById(`t2-dim${i}-slider-${matchIndex}`);
+                    if (slider) {
+                        tensor2_indices.push(parseInt(slider.value) || 0);
+                    }
+                }
+            }
+            
+            const count = parseInt(document.getElementById(`manual-count-input-${matchIndex}`).value) || 10;
+            
+            try {
+                const response = await fetch('/get_tensor_values_manual', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        match_index: matchIndex,
+                        tensor1_indices: tensor1_indices,
+                        tensor2_indices: tensor2_indices,
+                        count: count
+                    }),
+                });
+                
+                const result = await response.json();
+                
+                if (result.error) {
+                    alert(`Error: ${result.error}`);
+                    return;
+                }
+                
+                displayManualTensorValues(matchIndex, result);
+                
+            } catch (error) {
+                console.error('Error applying dimension mapping:', error);
+                alert(`Error: ${error.message}`);
+            }
+        }
+        
+        function displayManualTensorValues(matchIndex, result) {
+            const displayDiv = document.getElementById(`tensor-display-${matchIndex}`);
+            
+            let html = '<div class="tensor-comparison">';
+            
+            // Add summary statistics if available
+            if (result.summary_stats && !result.summary_stats.error) {
+                const stats = result.summary_stats;
+                const isIdentical = stats.comparison_info.values_identical;
+                const maxDiff = stats.difference_stats.abs_diff_max;
+                const cosineSim = stats.difference_stats.cosine_sim;
+                
+                html += `<div class="summary-stats" style="margin-bottom: 15px; ${isIdentical ? 'background-color: #e8f5e8; border-color: #28a745;' : ''}">`;
+                html += '<h5>Manual Mapping Statistics</h5>';
+                html += '<div class="stats-grid">';
+                
+                // Tensor 1 stats
+                html += `<div class="stat-item">`;
+                html += `<span class="stat-label">Model 1 Mean:</span>`;
+                html += `<span class="stat-value">${stats.tensor1_stats.mean.toFixed(6)}</span>`;
+                html += `</div>`;
+                html += `<div class="stat-item">`;
+                html += `<span class="stat-label">Model 2 Mean:</span>`;
+                html += `<span class="stat-value">${stats.tensor2_stats.mean.toFixed(6)}</span>`;
+                html += `</div>`;
+                
+                // Difference stats (highlighted)
+                html += `<div class="stat-item highlight">`;
+                html += `<span class="stat-label">Max Difference:</span>`;
+                html += `<span class="stat-value">${maxDiff.toFixed(6)}</span>`;
+                html += `</div>`;
+                html += `<div class="stat-item highlight">`;
+                html += `<span class="stat-label">Cosine Similarity:</span>`;
+                html += `<span class="stat-value">${cosineSim.toFixed(6)}</span>`;
+                html += `</div>`;
+                
+                // Comparison info
+                html += `<div class="stat-item">`;
+                html += `<span class="stat-label">Elements Compared:</span>`;
+                html += `<span class="stat-value">${stats.comparison_info.elements_compared}</span>`;
+                html += `</div>`;
+                html += `<div class="stat-item ${isIdentical ? 'highlight' : ''}">`;
+                html += `<span class="stat-label">Values Identical:</span>`;
+                html += `<span class="stat-value">${isIdentical ? '✓ YES' : '✗ NO'}</span>`;
+                html += `</div>`;
+                
+                html += '</div>';
+                
+                // Add interpretation note
+                if (isIdentical) {
+                    html += '<div style="text-align: center; margin-top: 10px; padding: 8px; background-color: #d4edda; border-radius: 4px; color: #155724;">';
+                    html += '🎉 <strong>Values are identical!</strong> This mapping reveals the tensors contain the same data.';
+                    html += '</div>';
+                } else if (cosineSim > 0.999 && maxDiff < 1e-3) {
+                    html += '<div style="text-align: center; margin-top: 10px; padding: 8px; background-color: #d4edda; border-radius: 4px; color: #155724;">';
+                    html += '✅ <strong>Values are very similar!</strong> This mapping reveals nearly identical tensor data.';
+                    html += '</div>';
+                } else if (cosineSim > 0.99 && maxDiff < 0.1) {
+                    html += '<div style="text-align: center; margin-top: 10px; padding: 8px; background-color: #d4edda; border-radius: 4px; color: #155724;">';
+                    html += '✅ <strong>Good alignment found!</strong> This mapping shows high similarity between tensors.';
+                    html += '</div>';
+                } else if (cosineSim > 0.5) {
+                    html += '<div style="text-align: center; margin-top: 10px; padding: 8px; background-color: #fff3cd; border-radius: 4px; color: #856404;">';
+                    html += '⚠️ Moderate similarity. Try adjusting dimension mappings for better alignment.';
+                    html += '</div>';
+                } else {
+                    html += '<div style="text-align: center; margin-top: 10px; padding: 8px; background-color: #f8d7da; border-radius: 4px; color: #721c24;">';
+                    html += '❌ Low similarity. Try different dimension mappings to explore other alignments.';
+                    html += '</div>';
+                }
+                
+                html += '</div>';
+            } else if (result.summary_stats && result.summary_stats.error) {
+                html += `<div class="summary-stats error" style="margin-bottom: 15px;">`;
+                html += `<strong>Statistics Error:</strong> ${result.summary_stats.error}`;
+                html += `</div>`;
+            }
+            
+            html += '<div class="comparison-info">';
+            html += `<p><strong>Manual Mapping Applied</strong></p>`;
+            html += `<p>Tensor 1 slice: [${result.tensor1_slice_info || 'N/A'}]</p>`;
+            html += `<p>Tensor 2 slice: [${result.tensor2_slice_info || 'N/A'}]</p>`;
+            html += '</div>';
+            
+            // Create table showing values side by side
+            if (result.tensor1_values || result.tensor2_values) {
+                html += '<div class="values-table">';
+                html += '<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">';
+                html += '<thead><tr><th style="border: 1px solid #ccc; padding: 8px;">Index</th>';
+                
+                if (result.tensor1_values) {
+                    html += '<th style="border: 1px solid #ccc; padding: 8px; background-color: #e3f2fd;">Tensor 1</th>';
+                }
+                if (result.tensor2_values) {
+                    html += '<th style="border: 1px solid #ccc; padding: 8px; background-color: #fff3e0;">Tensor 2</th>';
+                }
+                if (result.tensor1_values && result.tensor2_values) {
+                    html += '<th style="border: 1px solid #ccc; padding: 8px; background-color: #f3e5f5;">Difference</th>';
+                }
+                
+                html += '</tr></thead><tbody>';
+                
+                const maxLength = Math.max(
+                    result.tensor1_values ? result.tensor1_values.length : 0,
+                    result.tensor2_values ? result.tensor2_values.length : 0
+                );
+                
+                for (let i = 0; i < maxLength; i++) {
+                    html += '<tr>';
+                    html += `<td style="border: 1px solid #ccc; padding: 8px; font-weight: bold;">${i}</td>`;
+                    
+                    const val1 = result.tensor1_values && i < result.tensor1_values.length ? result.tensor1_values[i] : null;
+                    const val2 = result.tensor2_values && i < result.tensor2_values.length ? result.tensor2_values[i] : null;
+                    
+                    if (result.tensor1_values) {
+                        const formatted1 = val1 !== null ? (typeof val1 === 'number' ? val1.toFixed(6) : val1) : 'N/A';
+                        html += `<td style="border: 1px solid #ccc; padding: 8px; background-color: #e3f2fd;">${formatted1}</td>`;
+                    }
+                    
+                    if (result.tensor2_values) {
+                        const formatted2 = val2 !== null ? (typeof val2 === 'number' ? val2.toFixed(6) : val2) : 'N/A';
+                        html += `<td style="border: 1px solid #ccc; padding: 8px; background-color: #fff3e0;">${formatted2}</td>`;
+                    }
+                    
+                    if (result.tensor1_values && result.tensor2_values && val1 !== null && val2 !== null) {
+                        const diff = val1 - val2;
+                        const diffFormatted = Math.abs(diff) < 1e-10 ? '0.000000' : diff.toFixed(6);
+                        const diffColor = Math.abs(diff) > 1e-6 ? '#ffebee' : '#e8f5e8';
+                        html += `<td style="border: 1px solid #ccc; padding: 8px; background-color: ${diffColor};">${diffFormatted}</td>`;
+                    }
+                    
+                    html += '</tr>';
+                }
+                
+                html += '</tbody></table>';
+                html += '</div>';
+            }
+            
+            html += '</div>';
+            displayDiv.innerHTML = html;
+        }
+        
+        function toggleAutoUpdate(matchIndex) {
+            const checkbox = document.getElementById(`auto-update-${matchIndex}`);
+            console.log(`Auto-update for match ${matchIndex}: ${checkbox.checked ? 'enabled' : 'disabled'}`);
+        }
+        
+        function resetManualSliders(matchIndex) {
+            const shapes = originalShapes[matchIndex];
+            if (!shapes) return;
+            
+            // Reset all tensor 1 sliders
+            if (shapes.tensor1_shape) {
+                for (let i = 0; i < shapes.tensor1_shape.length; i++) {
+                    const slider = document.getElementById(`t1-dim${i}-slider-${matchIndex}`);
+                    const input = document.getElementById(`t1-dim${i}-input-${matchIndex}`);
+                    const valueSpan = document.getElementById(`t1-dim${i}-value-${matchIndex}`);
+                    
+                    if (slider) slider.value = 0;
+                    if (input) input.value = 0;
+                    if (valueSpan) valueSpan.textContent = '0';
+                }
+            }
+            
+            // Reset all tensor 2 sliders
+            if (shapes.tensor2_shape) {
+                for (let i = 0; i < shapes.tensor2_shape.length; i++) {
+                    const slider = document.getElementById(`t2-dim${i}-slider-${matchIndex}`);
+                    const input = document.getElementById(`t2-dim${i}-input-${matchIndex}`);
+                    const valueSpan = document.getElementById(`t2-dim${i}-value-${matchIndex}`);
+                    
+                    if (slider) slider.value = 0;
+                    if (input) input.value = 0;
+                    if (valueSpan) valueSpan.textContent = '0';
+                }
+            }
+            
+            // Auto-apply if enabled
+            const autoUpdateCheckbox = document.getElementById(`auto-update-${matchIndex}`);
+            if (autoUpdateCheckbox && autoUpdateCheckbox.checked) {
+                applyDimensionMapping(matchIndex);
+            }
+        }
+        
+        function copyTensor1ToTensor2(matchIndex) {
+            const shapes = originalShapes[matchIndex];
+            if (!shapes || !shapes.tensor1_shape || !shapes.tensor2_shape) return;
+            
+            // Copy values from tensor 1 sliders to tensor 2 sliders (up to the minimum length)
+            const minDims = Math.min(shapes.tensor1_shape.length, shapes.tensor2_shape.length);
+            
+            for (let i = 0; i < minDims; i++) {
+                const t1Slider = document.getElementById(`t1-dim${i}-slider-${matchIndex}`);
+                const t2Slider = document.getElementById(`t2-dim${i}-slider-${matchIndex}`);
+                const t2Input = document.getElementById(`t2-dim${i}-input-${matchIndex}`);
+                const t2ValueSpan = document.getElementById(`t2-dim${i}-value-${matchIndex}`);
+                
+                if (t1Slider && t2Slider) {
+                    // Clamp to target tensor's dimension size
+                    const t1Value = parseInt(t1Slider.value);
+                    const maxValue = parseInt(t2Slider.max);
+                    const clampedValue = Math.min(t1Value, maxValue);
+                    
+                    t2Slider.value = clampedValue;
+                    if (t2Input) t2Input.value = clampedValue;
+                    if (t2ValueSpan) t2ValueSpan.textContent = clampedValue;
+                }
+            }
+            
+            // Auto-apply if enabled
+            const autoUpdateCheckbox = document.getElementById(`auto-update-${matchIndex}`);
+            if (autoUpdateCheckbox && autoUpdateCheckbox.checked) {
+                applyDimensionMapping(matchIndex);
+            }
+        }
+        
+        function tryCommonMappings(matchIndex) {
+            const shapes = originalShapes[matchIndex];
+            if (!shapes || !shapes.tensor1_shape || !shapes.tensor2_shape) return;
+            
+            const t1Shape = shapes.tensor1_shape;
+            const t2Shape = shapes.tensor2_shape;
+            
+            // Define some common mapping patterns to try
+            const mappings = [
+                {
+                    name: "Identity mapping (0,0,0...)",
+                    t1: new Array(t1Shape.length).fill(0),
+                    t2: new Array(t2Shape.length).fill(0)
+                }
+            ];
+            
+            // Add pattern for removing leading 1 dimensions
+            if (t2Shape[0] === 1 && t2Shape.length > t1Shape.length) {
+                mappings.push({
+                    name: "Skip leading 1 dim in T2",
+                    t1: new Array(t1Shape.length).fill(0),
+                    t2: [0, ...new Array(t1Shape.length).fill(0)]
+                });
+            }
+            
+            if (t1Shape[0] === 1 && t1Shape.length > t2Shape.length) {
+                mappings.push({
+                    name: "Skip leading 1 dim in T1", 
+                    t1: [0, ...new Array(t2Shape.length).fill(0)],
+                    t2: new Array(t2Shape.length).fill(0)
+                });
+            }
+            
+            // Show dialog with mapping options
+            let message = "Choose a common mapping pattern:\\n\\n";
+            message += `Tensor 1 shape: [${t1Shape.join(', ')}]\\n`;
+            message += `Tensor 2 shape: [${t2Shape.join(', ')}]\\n\\n`;
+            
+            mappings.forEach((mapping, idx) => {
+                message += `${idx + 1}. ${mapping.name}\\n`;
+            });
+            
+            const choice = prompt(message + "\\nEnter number (1-" + mappings.length + "), or cancel:");
+            const choiceNum = parseInt(choice);
+            
+            if (choiceNum >= 1 && choiceNum <= mappings.length) {
+                const mapping = mappings[choiceNum - 1];
+                
+                // Apply the mapping
+                applyMappingPattern(matchIndex, mapping.t1, mapping.t2);
+                
+                // Auto-apply if enabled
+                const autoUpdateCheckbox = document.getElementById(`auto-update-${matchIndex}`);
+                if (autoUpdateCheckbox && autoUpdateCheckbox.checked) {
+                    applyDimensionMapping(matchIndex);
+                }
+            }
+        }
+        
+        function applyMappingPattern(matchIndex, t1Values, t2Values) {
+            // Set tensor 1 sliders
+            t1Values.forEach((value, i) => {
+                const slider = document.getElementById(`t1-dim${i}-slider-${matchIndex}`);
+                const input = document.getElementById(`t1-dim${i}-input-${matchIndex}`);
+                const valueSpan = document.getElementById(`t1-dim${i}-value-${matchIndex}`);
+                
+                if (slider) {
+                    const clampedValue = Math.max(0, Math.min(value, parseInt(slider.max)));
+                    slider.value = clampedValue;
+                    if (input) input.value = clampedValue;
+                    if (valueSpan) valueSpan.textContent = clampedValue;
+                }
+            });
+            
+            // Set tensor 2 sliders
+            t2Values.forEach((value, i) => {
+                const slider = document.getElementById(`t2-dim${i}-slider-${matchIndex}`);
+                const input = document.getElementById(`t2-dim${i}-input-${matchIndex}`);
+                const valueSpan = document.getElementById(`t2-dim${i}-value-${matchIndex}`);
+                
+                if (slider) {
+                    const clampedValue = Math.max(0, Math.min(value, parseInt(slider.max)));
+                    slider.value = clampedValue;
+                    if (input) input.value = clampedValue;
+                    if (valueSpan) valueSpan.textContent = clampedValue;
+                }
+            });
+        }
+        
+        function updateManualCountSlider(matchIndex) {
+            const slider = document.getElementById(`manual-count-slider-${matchIndex}`);
+            const valueSpan = document.getElementById(`manual-count-value-${matchIndex}`);
+            const input = document.getElementById(`manual-count-input-${matchIndex}`);
+            
+            if (slider && valueSpan && input) {
+                const value = slider.value;
+                valueSpan.textContent = value;
+                input.value = value;
+                
+                // Auto-apply if enabled
+                const autoUpdateCheckbox = document.getElementById(`auto-update-${matchIndex}`);
+                if (autoUpdateCheckbox && autoUpdateCheckbox.checked) {
+                    // Debounce the auto-update to avoid too many requests
+                    clearTimeout(window[`autoUpdateCountTimer_${matchIndex}`]);
+                    window[`autoUpdateCountTimer_${matchIndex}`] = setTimeout(() => {
+                        applyDimensionMapping(matchIndex);
+                    }, 500); // 500ms delay
+                }
+            }
+        }
+        
+        function syncManualCountFromInput(matchIndex) {
+            const slider = document.getElementById(`manual-count-slider-${matchIndex}`);
+            const valueSpan = document.getElementById(`manual-count-value-${matchIndex}`);
+            const input = document.getElementById(`manual-count-input-${matchIndex}`);
+            
+            if (slider && valueSpan && input) {
+                let value = parseInt(input.value) || 10;
+                const max = parseInt(slider.max);
+                const min = parseInt(slider.min);
+                
+                // Clamp value to slider range
+                value = Math.max(min, Math.min(max, value));
+                
+                slider.value = value;
+                valueSpan.textContent = value;
+                input.value = value; // Update input in case it was clamped
+                
+                // Auto-apply if enabled
+                const autoUpdateCheckbox = document.getElementById(`auto-update-${matchIndex}`);
+                if (autoUpdateCheckbox && autoUpdateCheckbox.checked) {
+                    applyDimensionMapping(matchIndex);
+                }
+            }
+        }
+        
+        async function quickManualMapping(matchIndex) {
+            // Open tensor values if not already open
+            const valuesContainer = document.getElementById(`values-${matchIndex}`);
+            if (valuesContainer.style.display === 'none') {
+                await showTensorValues(matchIndex);
+            }
+            
+            // Switch directly to manual mapping mode
+            const mappingDiv = document.getElementById(`dimension-mapping-${matchIndex}`);
+            const autoDiv = document.getElementById(`auto-controls-${matchIndex}`);
+            
+            if (mappingDiv && autoDiv) {
+                // Switch to manual mapping mode
+                mappingDiv.style.display = 'block';
+                autoDiv.style.display = 'none';
+                mappingMode[matchIndex] = true;
+                
+                // Initialize dimension mapping if not already done
+                if (!originalShapes[matchIndex]) {
+                    await initializeDimensionMapping(matchIndex);
+                }
+                
+                // Scroll to the manual mapping interface
+                mappingDiv.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'start' 
+                });
+                
+                // Highlight the interface briefly
+                mappingDiv.style.border = '2px solid #17a2b8';
+                setTimeout(() => {
+                    mappingDiv.style.border = '';
+                }, 2000);
             }
         }
         
