@@ -5,8 +5,8 @@ import os
 import torch
 from pathlib import Path
 
-# Add the current directory to path so we can import app functions
-sys.path.insert(0, '.')
+# Add the parent directory to path so we can import app functions
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import process_single_tensor, DualPthStrategy, match_tensors, store_matches_for_inspection
 
 def test_dual_pth_processing():

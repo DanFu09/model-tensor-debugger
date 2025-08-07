@@ -15,8 +15,8 @@ try:
 except ImportError:
     from werkzeug.wrappers import Response as BaseResponse
 
-# Add current directory to path
-sys.path.insert(0, '.')
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def test_serverless_function():
     """Test the serverless function wrapper"""

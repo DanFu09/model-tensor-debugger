@@ -1,6 +1,6 @@
 # Test Suite for ML Model Tensor Debugger
 
-This directory contains comprehensive unit tests for the tensor processing functionality.
+This directory contains comprehensive tests for the ML Model Tensor Debugger application, including unit tests, integration tests, and test utilities.
 
 ## Running Tests
 
@@ -12,7 +12,12 @@ conda activate ml-debug-viz
 
 ### Run All Tests
 ```bash
+# From project root
+python -m pytest tests/ -v
+
+# Run specific test files
 python -m pytest tests/test_tensor_processing.py -v
+python -m pytest tests/test_backend.py -v
 ```
 
 ### Run Specific Test Classes
@@ -26,6 +31,45 @@ python -m pytest tests/test_tensor_processing.py::TestTPAwareReshaping -v
 # Test edge cases only
 python -m pytest tests/test_tensor_processing.py::TestEdgeCases -v
 ```
+
+### Run Direct Tests (non-pytest)
+```bash
+# Run verification tests
+cd tests && python verify_deployment.py
+
+# Run dual .pth tests
+cd tests && python test_dual_pth_direct.py
+
+# Run backend tests
+cd tests && python test_backend.py
+```
+
+## Test Files
+
+### Core Test Files
+- **`test_tensor_processing.py`**: Comprehensive unit tests for tensor processing functions
+- **`test_backend.py`**: Backend integration tests  
+- **`test_dual_pth_direct.py`**: Direct dual .pth file processing tests
+- **`conftest.py`**: pytest configuration and fixtures
+
+### Utility/Development Test Files
+- **`verify_deployment.py`**: Deployment verification tests
+- **`test_local_serverless.py`**: Local serverless function testing
+- **`test_mock_tensors.py`**: Mock tensor data tests
+- **`test_tensor_loading.py`**: Tensor file loading tests
+- **`test_tensor_conversion.py`**: Tensor conversion tests
+
+### Test Data Creation Scripts
+- **`create_test_files.py`**: Generate basic test tensor files
+- **`create_proper_test_files.py`**: Generate more realistic test data
+- **`create_real_test_files.py`**: Generate production-like test data
+
+### Test Data Files
+- **`.pth files`**: Various test tensor files for different scenarios
+  - `test_tensor_1.pth`, `test_tensor_2.pth`: Basic test tensors
+  - `real_tensor_1.pth`, `real_tensor_2.pth`: Realistic test tensors  
+  - `test_single_file.pth`: Single file test tensor
+  - `test_file1.pth`, `test_file2.pth`: Dual file test tensors
 
 ## Test Coverage
 

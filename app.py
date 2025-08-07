@@ -13,6 +13,12 @@ import plotly.utils
 import uuid
 import threading
 import time
+try:
+    from safetensors.torch import load_file as load_safetensors
+    SAFETENSORS_AVAILABLE = True
+except ImportError:
+    SAFETENSORS_AVAILABLE = False
+    print("Warning: safetensors not available. Install with: pip install safetensors")
 
 # Configure Flask to work with Vercel's directory structure
 template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
@@ -32,42 +38,110 @@ def extract_archive(file_path, extract_to):
         raise ValueError("Unsupported file format")
 
 def load_tensor_files(directory):
-    """Load all .pth files from directory with robust compatibility handling"""
+    """Load all .pth and .safetensors files from directory with robust compatibility handling"""
     tensor_data = {}
     failed_files = []
     
-    for file_path in Path(directory).rglob('*.pth'):
+    # Find both .pth and .safetensors files
+    tensor_files = list(Path(directory).rglob('*.pth')) + list(Path(directory).rglob('*.safetensors'))
+    
+    for file_path in tensor_files:
         try:
             print(f"Loading: {file_path.name}")
             tensor = None
             
-            # Try multiple loading strategies for compatibility - ALWAYS map to CPU
-            # Strategy 1: Normal loading
-            try:
-                tensor = torch.load(file_path, map_location='cpu')
-                # Ensure tensor is definitely on CPU
-                if hasattr(tensor, 'cpu'):
-                    tensor = tensor.cpu()
-            except Exception as e1:
-                print(f"  Normal loading failed: {e1}")
+            # Check if it's a safetensors file
+            if file_path.suffix.lower() == '.safetensors':
+                if not SAFETENSORS_AVAILABLE:
+                    print(f"  Skipping {file_path.name}: safetensors not available")
+                    failed_files.append(str(file_path))
+                    continue
                 
-                # Strategy 2: Load with weights_only=True (if available)
                 try:
-                    tensor = torch.load(file_path, map_location='cpu', weights_only=True)
+                    tensor = load_safetensors(file_path)
+                    print("  Loaded safetensors file successfully")
+                    # Safetensors files are loaded as dictionaries, similar to torch.load
+                except Exception as e:
+                    print(f"  Safetensors loading failed: {e}")
+                    failed_files.append(str(file_path))
+                    continue
+            else:
+                # Try multiple loading strategies for .pth files - ALWAYS map to CPU
+                # Strategy 1: Normal loading
+                try:
+                    tensor = torch.load(file_path, map_location='cpu')
                     # Ensure tensor is definitely on CPU
                     if hasattr(tensor, 'cpu'):
                         tensor = tensor.cpu()
-                    print("  Loaded with weights_only=True")
-                except Exception as e2:
-                    print(f"  weights_only loading failed: {e2}")
-                    failed_files.append(str(file_path))
-                    continue
+                except Exception as e1:
+                    print(f"  Normal loading failed: {e1}")
+                    
+                    # Strategy 2: Load with weights_only=True (if available)
+                    try:
+                        tensor = torch.load(file_path, map_location='cpu', weights_only=True)
+                        # Ensure tensor is definitely on CPU
+                        if hasattr(tensor, 'cpu'):
+                            tensor = tensor.cpu()
+                        print("  Loaded with weights_only=True")
+                    except Exception as e2:
+                        print(f"  weights_only loading failed: {e2}")
+                        failed_files.append(str(file_path))
+                        continue
             
             if tensor is not None:
                 rel_path = file_path.relative_to(directory)
                 
-                # Handle scalars (like sliding which is just a float/int)
-                if hasattr(tensor, 'shape'):
+                # Handle safetensors files (which are dictionaries) and regular tensors
+                if isinstance(tensor, dict):
+                    # Safetensors files contain multiple tensors
+                    for key, tensor_value in tensor.items():
+                        # Ensure tensor is on CPU
+                        if hasattr(tensor_value, 'cpu'):
+                            tensor_value = tensor_value.cpu()
+                        
+                        tensor_key = f"{rel_path}:{key}"  # Use file:tensor_name format
+                        
+                        if hasattr(tensor_value, 'shape'):
+                            print(f"  ✓ {key} Shape: {tensor_value.shape}, Dtype: {tensor_value.dtype}")
+                            
+                            # Calculate statistics with NaN handling
+                            if tensor_value.numel() > 0:
+                                mean_val = tensor_value.mean().item()
+                                std_val = tensor_value.std().item()
+                                min_val = tensor_value.min().item()
+                                max_val = tensor_value.max().item()
+                                
+                                # Replace NaN/Inf values with safe defaults
+                                mean_val = 0.0 if not torch.isfinite(torch.tensor(mean_val)) else mean_val
+                                std_val = 0.0 if not torch.isfinite(torch.tensor(std_val)) else std_val
+                                min_val = 0.0 if not torch.isfinite(torch.tensor(min_val)) else min_val
+                                max_val = 0.0 if not torch.isfinite(torch.tensor(max_val)) else max_val
+                            else:
+                                mean_val = std_val = min_val = max_val = 0.0
+                            
+                            tensor_data[tensor_key] = {
+                                'tensor': tensor_value,
+                                'shape': list(tensor_value.shape),
+                                'dtype': str(tensor_value.dtype),
+                                'mean': float(mean_val),
+                                'std': float(std_val),
+                                'min': float(min_val),
+                                'max': float(max_val),
+                            }
+                        else:
+                            # Handle scalar values in safetensors (rare but possible)
+                            print(f"  ✓ {key} Scalar value: {tensor_value} (type: {type(tensor_value)})")
+                            tensor_data[tensor_key] = {
+                                'tensor': tensor_value,
+                                'shape': [],  # Empty shape for scalar
+                                'dtype': str(type(tensor_value)),
+                                'mean': float(tensor_value),
+                                'std': 0.0,
+                                'min': float(tensor_value),
+                                'max': float(tensor_value),
+                            }
+                # Handle single tensors and scalars (like sliding which is just a float/int)
+                elif hasattr(tensor, 'shape'):
                     print(f"  ✓ Shape: {tensor.shape}, Dtype: {tensor.dtype}")
                     
                     # Calculate statistics with NaN handling
@@ -420,7 +494,126 @@ def match_tensors_layer_stage(model1_data, model2_data):
                 'model2_data': {k: v for k, v in data2.items() if k != 'tensor'},
                 'diff_stats': diff_stats,
                 'tensor1': data1['tensor'],  # Keep tensors for detailed inspection
-                'tensor2': data2['tensor']
+                'tensor2': data2['tensor'],
+                'match_type': 'both'
+            })
+    
+    # Handle files that exist in both models but weren't matched by layer+stage logic
+    # This catches files that don't follow the expected naming convention
+    already_matched_files1 = set()
+    already_matched_files2 = set()
+    
+    for match in matches:
+        if match['model1_file']:
+            already_matched_files1.add(match['model1_file'])
+        if match['model2_file']:
+            already_matched_files2.add(match['model2_file'])
+    
+    # Find unmatched files
+    unmatched_model1 = {}
+    unmatched_model2 = {}
+    
+    for file1, data1 in model1_data.items():
+        if file1 not in already_matched_files1:
+            unmatched_model1[file1] = data1
+            
+    for file2, data2 in model2_data.items():
+        if file2 not in already_matched_files2:
+            unmatched_model2[file2] = data2
+    
+    # Try to match unmatched files by filename similarity
+    print(f"\n=== Processing {len(unmatched_model1)} unmatched model1 files and {len(unmatched_model2)} unmatched model2 files ===")
+    
+    matched_unmatched = set()
+    for file1, data1 in unmatched_model1.items():
+        best_match = None
+        best_score = 0
+        
+        # Extract base filename for comparison
+        name1 = Path(file1).name.lower().replace('.pth', '').replace('.safetensors', '')
+        
+        for file2, data2 in unmatched_model2.items():
+            if file2 in matched_unmatched:
+                continue
+                
+            name2 = Path(file2).name.lower().replace('.pth', '').replace('.safetensors', '')
+            
+            # Check for exact match first
+            if name1 == name2:
+                best_match = (file2, data2)
+                best_score = 1.0
+                break
+            
+            # Check for partial matches (same base name, different layer numbers)
+            # Remove layer numbers and compare
+            clean_name1 = ''.join(c for c in name1 if not c.isdigit()).strip('_')
+            clean_name2 = ''.join(c for c in name2 if not c.isdigit()).strip('_')
+            
+            if clean_name1 == clean_name2 and len(clean_name1) > 3:  # Avoid matching very short names
+                similarity = len(clean_name1) / max(len(name1), len(name2))
+                if similarity > best_score:
+                    best_match = (file2, data2)
+                    best_score = similarity
+        
+        if best_match and best_score >= 0.5:  # Only match if reasonably similar
+            file2, data2 = best_match
+            matched_unmatched.add(file2)
+            
+            print(f"    ✓ Matched unmatched files: {Path(file1).name} <-> {Path(file2).name} (score: {best_score:.2f})")
+            
+            # Calculate difference statistics
+            diff_stats = calculate_tensor_diff(data1['tensor'], data2['tensor'])
+            
+            matches.append({
+                'model1_file': file1,
+                'model2_file': file2,
+                'layer_num': 9999,  # Put unmatched files at the end
+                'stage': Path(file1).stem,
+                'stage_index': 9999,
+                'stage_display': Path(file1).stem.replace('_', ' ').title() + ' (Auto-matched)',
+                'model1_data': {k: v for k, v in data1.items() if k != 'tensor'},
+                'model2_data': {k: v for k, v in data2.items() if k != 'tensor'},
+                'diff_stats': diff_stats,
+                'tensor1': data1['tensor'],
+                'tensor2': data2['tensor'],
+                'match_type': 'both'
+            })
+    
+    # Add remaining unmatched files as single-model entries
+    for file1, data1 in unmatched_model1.items():
+        if not any(match['model1_file'] == file1 for match in matches):
+            print(f"    - File only in Model 1: {Path(file1).name}")
+            matches.append({
+                'model1_file': file1,
+                'model2_file': None,
+                'layer_num': 9999,
+                'stage': Path(file1).stem,
+                'stage_index': 9999,
+                'stage_display': Path(file1).stem.replace('_', ' ').title() + ' (Model 1 only)',
+                'model1_data': {k: v for k, v in data1.items() if k != 'tensor'},
+                'model2_data': None,
+                'diff_stats': None,
+                'tensor1': data1['tensor'],
+                'tensor2': None,
+                'match_type': 'model1_only'
+            })
+    
+    for file2, data2 in unmatched_model2.items():
+        if file2 not in matched_unmatched and not any(match['model2_file'] == file2 for match in matches):
+            print(f"    - File only in Model 2: {Path(file2).name}")
+            matches.append({
+                'model1_file': None,
+                'model2_file': file2,
+                'layer_num': 9999,
+                'stage': Path(file2).stem,
+                'stage_index': 9999,
+                'stage_display': Path(file2).stem.replace('_', ' ').title() + ' (Model 2 only)',
+                'model1_data': None,
+                'model2_data': {k: v for k, v in data2.items() if k != 'tensor'},
+                'diff_stats': None,
+                'tensor1': None,
+                'tensor2': data2['tensor'],
+                'match_type': 'model2_only'
             })
     
     # Sort matches by layer number, then by stage order
@@ -1389,11 +1582,29 @@ def process_dual_archives(assembled_files, temp_dir):
         'upload_mode': 'dual_archive'
     }
 
+def load_tensor_file(file_path):
+    """Load a single tensor file (.pth or .safetensors)"""
+    file_path = Path(file_path)
+    
+    if file_path.suffix.lower() == '.safetensors':
+        if not SAFETENSORS_AVAILABLE:
+            raise ImportError("safetensors not available. Install with: pip install safetensors")
+        return load_safetensors(file_path)
+    else:
+        # Try loading .pth file with fallback strategies
+        try:
+            return torch.load(file_path, map_location='cpu')
+        except Exception as e1:
+            try:
+                return torch.load(file_path, map_location='cpu', weights_only=True)
+            except Exception as e2:
+                raise Exception(f"Failed to load {file_path}: {e1}, fallback failed: {e2}")
+
 def process_dual_pth_files(assembled_files, temp_dir):
-    """Process dual .pth files from chunked upload"""
+    """Process dual tensor files (.pth or .safetensors) from chunked upload"""
     file_list = list(assembled_files.items())
     if len(file_list) != 2:
-        raise ValueError("Dual .pth mode requires exactly 2 files")
+        raise ValueError("Dual tensor mode requires exactly 2 files")
     
     model1_path = file_list[0][1]
     model2_path = file_list[1][1]
@@ -1403,7 +1614,7 @@ def process_dual_pth_files(assembled_files, temp_dir):
     model2_data = {}
     
     # Load first file
-    data1 = torch.load(model1_path, map_location='cpu')
+    data1 = load_tensor_file(model1_path)
     if isinstance(data1, dict):
         for key, tensor in data1.items():
             model1_data[f"file1:{key}"] = process_single_tensor(tensor, key)
@@ -1411,7 +1622,7 @@ def process_dual_pth_files(assembled_files, temp_dir):
         model1_data["file1"] = process_single_tensor(data1, 'tensor')
     
     # Load second file
-    data2 = torch.load(model2_path, map_location='cpu')
+    data2 = load_tensor_file(model2_path)
     if isinstance(data2, dict):
         for key, tensor in data2.items():
             model2_data[f"file2:{key}"] = process_single_tensor(tensor, key)
@@ -1440,7 +1651,7 @@ def process_single_file(assembled_files, temp_dir):
     
     # Load tensor data
     tensor_data = {}
-    data = torch.load(file_path, map_location='cpu')
+    data = load_tensor_file(file_path)
     
     if isinstance(data, dict):
         if len(data) == 0:

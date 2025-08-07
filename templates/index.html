@@ -137,6 +137,43 @@
             font-weight: 500;
         }
         
+        .size-warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            display: none;
+        }
+        
+        .size-warning-title {
+            font-weight: bold;
+            color: #856404;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .size-warning-title::before {
+            content: "⚠️";
+            margin-right: 8px;
+        }
+        
+        .size-warning-text {
+            color: #856404;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        .size-warning-suggestions {
+            margin-top: 10px;
+            padding-left: 20px;
+        }
+        
+        .size-warning-suggestions li {
+            margin-bottom: 4px;
+        }
+        
         .results {
             margin-top: 30px;
             display: none;
@@ -793,6 +830,20 @@
         
         <button class="upload-btn" id="upload-btn" disabled>Process Files</button>
         
+        <div class="size-warning" id="size-warning">
+            <div class="size-warning-title">Large File Upload Detected</div>
+            <div class="size-warning-text">
+                Your upload is larger than 25MB. For better performance and reliability, consider:
+                <ul class="size-warning-suggestions">
+                    <li><strong>Split archives:</strong> Create smaller ZIP/TAR files with fewer tensor files</li>
+                    <li><strong>Remove unnecessary files:</strong> Only include the tensor files you need to compare</li>
+                    <li><strong>Use compression:</strong> Ensure your archives are properly compressed</li>
+                    <li><strong>Upload individual .pth files:</strong> Use dual .pth mode instead of archives</li>
+                </ul>
+                <small><em>Large uploads may be slower and more prone to network timeouts.</em></small>
+            </div>
+        </div>
+        
         <div class="progress" id="progress">
             <div class="progress-bar" id="progress-bar"></div>
             <div class="progress-text" id="progress-text">Preparing upload...</div>
@@ -916,12 +967,15 @@
             // Detect file type and show appropriate info
             const isArchive = file.name.match(/\.(zip|tar\.gz|tgz)$/i);
             const isPth = file.name.match(/\.(pth|pt)$/i);
+            const isSafetensors = file.name.match(/\.safetensors$/i);
             
             let fileTypeIcon = '';
             if (isArchive) {
                 fileTypeIcon = '📦 ';
             } else if (isPth) {
                 fileTypeIcon = '📄 ';
+            } else if (isSafetensors) {
+                fileTypeIcon = '🔒 ';
             }
             
             fileInfo.innerHTML = `${fileTypeIcon}<strong>${file.name}</strong><br>Size: ${formatFileSize(file.size)}`;
@@ -929,6 +983,9 @@
             // Update detected mode and button
             updateDetectedMode();
             updateUploadButton();
+            
+            // Check file sizes immediately when files are selected
+            checkFileSizesAndShowWarning();
         }
         
         function formatFileSize(bytes) {
@@ -937,6 +994,78 @@
             const sizes = ['Bytes', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        function updateUploadButton() {
+            const uploadBtn = document.getElementById('upload-btn');
+            
+            if (detectedMode === 'dual-archive' && file1 && file2) {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Compare Models';
+            } else if (detectedMode === 'dual-pth' && file1 && file2) {
+                uploadBtn.disabled = false;
+                // Check if both are safetensors files
+                const bothSafetensors = file1.name.match(/\.safetensors$/i) && file2.name.match(/\.safetensors$/i);
+                const bothPth = file1.name.match(/\.(pth|pt)$/i) && file2.name.match(/\.(pth|pt)$/i);
+                
+                if (bothSafetensors) {
+                    uploadBtn.textContent = 'Compare SafeTensors';
+                } else if (bothPth) {
+                    uploadBtn.textContent = 'Compare PyTorch Tensors';
+                } else {
+                    uploadBtn.textContent = 'Compare Tensor Files';
+                }
+            } else {
+                uploadBtn.disabled = true;
+                uploadBtn.textContent = 'Process Files';
+            }
+        }
+        
+        function checkFileSizesAndShowWarning() {
+            const SIZE_LIMIT = 25 * 1024 * 1024; // 25MB in bytes
+            
+            // Only check if we have both files
+            if (file1 && file2) {
+                const totalSize = file1.size + file2.size;
+                
+                if (totalSize > SIZE_LIMIT) {
+                    showSizeWarning(totalSize);
+                } else {
+                    hideSizeWarning();
+                }
+            } else {
+                // Hide warning if we don't have both files yet
+                hideSizeWarning();
+            }
+        }
+        
+        function showSizeWarning(totalSize) {
+            const warning = document.getElementById('size-warning');
+            const sizeText = formatFileSize(totalSize);
+            
+            // Update the warning message with the actual file size
+            const warningText = warning.querySelector('.size-warning-text');
+            
+            // Add file size info
+            const sizeInfo = `<div style="margin-bottom: 10px; font-weight: bold; color: #d39e00;">Total size: ${sizeText} (exceeds 25MB recommended limit)</div>`;
+            const baseMessage = `
+                <div style="margin-bottom: 10px;"><strong>You can still upload these files</strong>, but for better performance consider:</div>
+                <ul class="size-warning-suggestions">
+                    <li><strong>Split archives:</strong> Create smaller ZIP/TAR files with fewer tensor files</li>
+                    <li><strong>Remove unnecessary files:</strong> Only include the tensor files you need to compare</li>
+                    <li><strong>Use compression:</strong> Ensure your archives are properly compressed</li>
+                    <li><strong>Upload individual .pth files:</strong> Use dual .pth mode instead of archives</li>
+                </ul>
+                <small><em>Large uploads use chunked transfer and may take longer to complete.</em></small>
+            `;
+            
+            warningText.innerHTML = sizeInfo + baseMessage;
+            warning.style.display = 'block';
+        }
+        
+        function hideSizeWarning() {
+            const warning = document.getElementById('size-warning');
+            warning.style.display = 'none';
         }
         
         
@@ -3111,11 +3240,17 @@
                 const file2IsArchive = file2.name.match(/\.(zip|tar\.gz|tgz)$/i);
                 const file1IsPth = file1.name.match(/\.(pth|pt)$/i);
                 const file2IsPth = file2.name.match(/\.(pth|pt)$/i);
+                const file1IsSafetensors = file1.name.match(/\.safetensors$/i);
+                const file2IsSafetensors = file2.name.match(/\.safetensors$/i);
+                
+                // Check for tensor files (both .pth and .safetensors)
+                const file1IsTensor = file1IsPth || file1IsSafetensors;
+                const file2IsTensor = file2IsPth || file2IsSafetensors;
                 
                 if (file1IsArchive && file2IsArchive) {
                     detectedMode = 'dual_archive';
-                } else if (file1IsPth && file2IsPth) {
-                    detectedMode = 'dual_pth';
+                } else if (file1IsTensor && file2IsTensor) {
+                    detectedMode = 'dual_pth'; // Use same mode for all tensor files
                 } else {
                     detectedMode = 'mixed'; // Different types - we'll handle this
                 }

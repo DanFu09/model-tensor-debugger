@@ -6,7 +6,7 @@ Run this locally to test before deployment
 
 import os
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def test_imports():
     """Test that all required imports work"""
