@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: ml-tensor-debugger
+    env: python
+    plan: free
+    buildCommand: |
+      # Upgrade pip and build tools first
+      python -m pip install --upgrade pip setuptools>=68.0.0 wheel
+      # Install requirements with retry
+      pip install --no-cache-dir -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: SETUPTOOLS_USE_DISTUTILS
+        value: "stdlib"
+      - key: MAX_CONTENT_LENGTH
+        value: "104857600"

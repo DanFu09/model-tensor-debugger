@@ -3,3 +3,5 @@ torch>=2.2.2
 numpy==1.24.3
 plotly==5.17.0
 werkzeug==2.3.7
+gunicorn==21.2.0
+setuptools>=68.0.0
