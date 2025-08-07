@@ -44,3 +44,4 @@ preload_app = True
 limit_request_line = 8190
 limit_request_fields = 100
 limit_request_field_size = 8190
+max_request_size = 536870912  # 512MB

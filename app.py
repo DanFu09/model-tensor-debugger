@@ -14,7 +14,7 @@ import plotly.utils
 # Configure Flask to work with Vercel's directory structure
 template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
 app = Flask(__name__, template_folder=template_dir)
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size (reduced for serverless)
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
 
 def extract_archive(file_path, extract_to):
     """Extract zip or tar.gz files"""
@@ -1062,7 +1062,21 @@ def handle_dual_archive_upload(files):
         })
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # Clean up on error
+        if 'temp_dir' in locals():
+            try:
+                shutil.rmtree(temp_dir)
+            except:
+                pass
+        
+        print(f"ERROR in handle_dual_archive_upload: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        return jsonify({
+            'error': f'Archive upload failed: {str(e)}',
+            'details': 'Check server logs for more information'
+        }), 500
 
 def store_matches_for_inspection(matches):
     """Store matches with original and reshaped tensors for inspection"""
