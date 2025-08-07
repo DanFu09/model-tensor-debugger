@@ -56,8 +56,8 @@ def load_tensor_files(directory):
                     'tensor': tensor,
                     'shape': list(tensor.shape),
                     'dtype': str(tensor.dtype),
-                    'mean': float(tensor.mean().item()) if tensor.numel() > 0 else 0,
-                    'std': float(tensor.std().item()) if tensor.numel() > 0 else 0,
+                    'mean': float(tensor.float().mean().item()) if tensor.numel() > 0 else 0,
+                    'std': float(tensor.float().std().item()) if tensor.numel() > 0 else 0,
                     'min': float(tensor.min().item()) if tensor.numel() > 0 else 0,
                     'max': float(tensor.max().item()) if tensor.numel() > 0 else 0,
                 }

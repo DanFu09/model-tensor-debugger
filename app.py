@@ -106,8 +106,8 @@ def load_tensor_files(directory):
                             
                             # Calculate statistics with NaN handling
                             if tensor_value.numel() > 0:
-                                mean_val = tensor_value.mean().item()
-                                std_val = tensor_value.std().item()
+                                mean_val = tensor_value.float().mean().item()
+                                std_val = tensor_value.float().std().item()
                                 min_val = tensor_value.min().item()
                                 max_val = tensor_value.max().item()
                                 
@@ -146,8 +146,8 @@ def load_tensor_files(directory):
                     
                     # Calculate statistics with NaN handling
                     if tensor.numel() > 0:
-                        mean_val = tensor.mean().item()
-                        std_val = tensor.std().item()
+                        mean_val = tensor.float().mean().item()
+                        std_val = tensor.float().std().item()
                         min_val = tensor.min().item()
                         max_val = tensor.max().item()
                         
@@ -897,9 +897,9 @@ def calculate_tensor_diff(tensor1, tensor2):
         diff = tensor1 - tensor2
         
         # Calculate statistics with NaN handling
-        abs_diff_mean = torch.abs(diff).mean().item()
+        abs_diff_mean = torch.abs(diff).float().mean().item()
         abs_diff_max = torch.abs(diff).max().item()
-        rel_diff_mean = (torch.abs(diff) / (torch.abs(tensor1) + 1e-8)).mean().item()
+        rel_diff_mean = (torch.abs(diff) / (torch.abs(tensor1) + 1e-8)).float().mean().item()
         mse = torch.mean(diff**2).item()
         cosine_sim = torch.nn.functional.cosine_similarity(
             tensor1.flatten(), tensor2.flatten(), dim=0).item()
@@ -1082,8 +1082,8 @@ def process_single_tensor(tensor, name):
     
     # Handle regular tensors
     if tensor.numel() > 0:
-        mean_val = tensor.mean().item()
-        std_val = tensor.std().item()
+        mean_val = tensor.float().mean().item()
+        std_val = tensor.float().std().item()
         min_val = tensor.min().item()
         max_val = tensor.max().item()
         
@@ -1980,9 +1980,9 @@ def get_tensor_values_manual():
                 abs_diff = torch.abs(diff)
                 
                 # Calculate statistics with NaN handling
-                abs_diff_mean = abs_diff.mean().item()
+                abs_diff_mean = abs_diff.float().mean().item()
                 abs_diff_max = abs_diff.max().item()
-                rel_diff_mean = (abs_diff / (torch.abs(sliced_tensor1) + 1e-8)).mean().item()
+                rel_diff_mean = (abs_diff / (torch.abs(sliced_tensor1) + 1e-8)).float().mean().item()
                 mse = torch.mean(diff**2).item()
                 
                 # Calculate cosine similarity if both tensors have non-zero magnitude
@@ -2002,13 +2002,13 @@ def get_tensor_values_manual():
                 cosine_sim = 1.0 if not torch.isfinite(torch.tensor(cosine_sim)) else cosine_sim
                 
                 # Calculate individual tensor statistics
-                tensor1_mean = sliced_tensor1.mean().item()
-                tensor1_std = sliced_tensor1.std().item()
+                tensor1_mean = sliced_tensor1.float().mean().item()
+                tensor1_std = sliced_tensor1.float().std().item()
                 tensor1_min = sliced_tensor1.min().item()
                 tensor1_max = sliced_tensor1.max().item()
                 
-                tensor2_mean = sliced_tensor2.mean().item()
-                tensor2_std = sliced_tensor2.std().item()
+                tensor2_mean = sliced_tensor2.float().mean().item()
+                tensor2_std = sliced_tensor2.float().std().item()
                 tensor2_min = sliced_tensor2.min().item()
                 tensor2_max = sliced_tensor2.max().item()
                 

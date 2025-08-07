@@ -27,8 +27,8 @@ def process_single_tensor(tensor, name):
     
     # Handle regular tensors
     if tensor.numel() > 0:
-        mean_val = tensor.mean().item()
-        std_val = tensor.std().item()
+        mean_val = tensor.float().mean().item()
+        std_val = tensor.float().std().item()
         min_val = tensor.min().item()
         max_val = tensor.max().item()
         
