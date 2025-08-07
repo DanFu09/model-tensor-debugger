@@ -5,16 +5,16 @@ import multiprocessing
 bind = "0.0.0.0:8000"
 backlog = 2048
 
-# Worker processes
-workers = multiprocessing.cpu_count() * 2 + 1
+# Worker processes - optimized for Render
+workers = 1  # Single worker to avoid memory issues on limited RAM
 worker_class = "sync"
 worker_connections = 1000
-timeout = 300
+timeout = 600  # Longer timeout for large file processing
 keepalive = 2
 
 # Restart workers after this many requests, to help prevent memory leaks
-max_requests = 1000
-max_requests_jitter = 100
+max_requests = 100  # More frequent restarts to prevent memory leaks
+max_requests_jitter = 50
 
 # Logging
 accesslog = "-"

@@ -112,7 +112,29 @@
             height: 100%;
             background-color: #007bff;
             width: 0%;
-            transition: width 0.3s;
+            transition: width 0.5s ease-out;
+            position: relative;
+            border-radius: 10px;
+        }
+        
+        .progress-bar::after {
+            content: attr(data-percentage);
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+        }
+        
+        .progress-text {
+            text-align: center;
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+            font-weight: 500;
         }
         
         .results {
@@ -773,6 +795,7 @@
         
         <div class="progress" id="progress">
             <div class="progress-bar" id="progress-bar"></div>
+            <div class="progress-text" id="progress-text">Preparing upload...</div>
         </div>
         
         <div class="results" id="results">
@@ -926,35 +949,65 @@
             document.getElementById('progress').style.display = 'none';
         }
         
-        function updateProgress(percent) {
-            document.getElementById('progress-bar').style.width = percent + '%';
+        function updateProgress(percent, text = null) {
+            const progressBar = document.getElementById('progress-bar');
+            progressBar.style.width = percent + '%';
+            progressBar.setAttribute('data-percentage', Math.round(percent) + '%');
+            
+            if (text) {
+                document.getElementById('progress-text').textContent = text;
+            }
         }
         
         async function uploadAndCompare() {
             showProgress();
-            updateProgress(10);
+            updateProgress(5);
             
-            const formData = new FormData();
-            formData.append('model1', model1File);
-            formData.append('model2', model2File);
+            // Determine upload mode and files
+            const files = [];
+            const fileNames = [];
+            let uploadMode = 'dual_archive';
+            
+            if (currentMode === 'dual-archive') {
+                if (!model1File || !model2File) {
+                    alert('Please select both files');
+                    hideProgress();
+                    return;
+                }
+                files.push(model1File, model2File);
+                fileNames.push(model1File.name, model2File.name);
+                uploadMode = 'dual_archive';
+            } else if (currentMode === 'dual-pth') {
+                if (!model1File || !model2File) {
+                    alert('Please select both .pth files');
+                    hideProgress();
+                    return;
+                }
+                files.push(model1File, model2File);
+                fileNames.push(model1File.name, model2File.name);
+                uploadMode = 'dual_pth';
+            } else if (currentMode === 'single-file') {
+                if (!singleFile) {
+                    alert('Please select a .pth file');
+                    hideProgress();
+                    return;
+                }
+                files.push(singleFile);
+                fileNames.push(singleFile.name);
+                uploadMode = 'single_file';
+            }
             
             try {
-                updateProgress(50);
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                updateProgress(80);
-                const result = await response.json();
+                // Use chunked upload for all files
+                const result = await uploadFilesInChunks(files, fileNames, uploadMode);
+                updateProgress(98, 'Displaying results...');
                 
                 if (result.error) {
                     throw new Error(result.error);
                 }
                 
-                updateProgress(90);
                 await displayResults(result);
-                updateProgress(100);
+                updateProgress(100, 'Complete!');
                 
                 setTimeout(hideProgress, 500);
                 
@@ -963,6 +1016,147 @@
                 document.getElementById('results').innerHTML = 
                     `<div class="error">Error: ${error.message}</div>`;
                 document.getElementById('results').style.display = 'block';
+            }
+        }
+        
+        async function uploadFilesInChunks(files, fileNames, uploadMode) {
+            const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+            
+            // Calculate total chunks for all files
+            const totalChunks = Math.max(...files.map(file => Math.ceil(file.size / CHUNK_SIZE)));
+            
+            updateProgress(10, 'Initializing upload session...');
+            
+            // Start chunked upload session
+            const sessionResponse = await fetch('/start_chunked_upload', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    total_chunks: totalChunks,
+                    file_names: fileNames
+                })
+            });
+            
+            const sessionData = await sessionResponse.json();
+            if (sessionData.error) {
+                throw new Error(sessionData.error);
+            }
+            
+            const sessionId = sessionData.session_id;
+            updateProgress(15, 'Upload session created, starting file upload...');
+            
+            // Calculate total chunks across all files for accurate progress
+            const totalChunksAllFiles = files.reduce((sum, file) => 
+                sum + Math.ceil(file.size / CHUNK_SIZE), 0);
+            let completedChunks = 0;
+            
+            // Upload files sequentially to better track progress
+            for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+                const file = files[fileIndex];
+                const fileName = fileNames[fileIndex];
+                const fileChunks = Math.ceil(file.size / CHUNK_SIZE);
+                
+                updateProgress(15 + (completedChunks / totalChunksAllFiles) * 70, 
+                    `Starting upload of ${fileName}...`);
+                
+                // Upload chunks for this file
+                for (let chunkIndex = 0; chunkIndex < fileChunks; chunkIndex++) {
+                    const start = chunkIndex * CHUNK_SIZE;
+                    const end = Math.min(start + CHUNK_SIZE, file.size);
+                    const chunk = file.slice(start, end);
+                    
+                    const formData = new FormData();
+                    formData.append('session_id', sessionId);
+                    formData.append('file_name', fileName);
+                    formData.append('chunk_index', chunkIndex.toString());
+                    formData.append('chunk', chunk);
+                    
+                    const chunkResponse = await fetch('/upload_chunk', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const chunkResult = await chunkResponse.json();
+                    if (chunkResult.error) {
+                        throw new Error(chunkResult.error);
+                    }
+                    
+                    completedChunks++;
+                    
+                    // Update progress based on total chunks completed
+                    const overallProgress = 15 + (completedChunks / totalChunksAllFiles) * 70;
+                    const progressText = `Uploading ${fileName} - chunk ${chunkIndex + 1}/${fileChunks} (${Math.round(overallProgress)}%)`;
+                    updateProgress(Math.floor(overallProgress), progressText);
+                    
+                    // Small delay to make progress visible for fast uploads
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                
+                updateProgress(15 + (completedChunks / totalChunksAllFiles) * 70, 
+                    `Completed ${fileName} (${completedChunks}/${totalChunksAllFiles} chunks)`);
+            }
+            updateProgress(85, 'All chunks uploaded, verifying completion...');
+            
+            // Monitor progress until all files are complete
+            await monitorUploadProgress(sessionId);
+            updateProgress(90, 'Upload complete, processing tensor files...');
+            
+            // Complete the upload and process files
+            const completeResponse = await fetch('/complete_chunked_upload', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    upload_mode: uploadMode
+                })
+            });
+            
+            const result = await completeResponse.json();
+            updateProgress(95, 'Tensor processing complete, preparing results...');
+            
+            return result;
+        }
+        
+        async function monitorUploadProgress(sessionId) {
+            let allComplete = false;
+            let lastProgress = 85;
+            
+            while (!allComplete) {
+                try {
+                    const progressResponse = await fetch(`/get_upload_progress/${sessionId}`);
+                    const progressData = await progressResponse.json();
+                    
+                    if (progressData.error) {
+                        throw new Error(progressData.error);
+                    }
+                    
+                    // Check if all files are complete
+                    allComplete = Object.values(progressData).every(fileProgress => fileProgress.completed);
+                    
+                    if (!allComplete) {
+                        // Show verification progress
+                        const completedFiles = Object.values(progressData).filter(fp => fp.completed).length;
+                        const totalFiles = Object.keys(progressData).length;
+                        const verifyProgress = 85 + (5 * completedFiles / totalFiles);
+                        
+                        if (verifyProgress > lastProgress) {
+                            updateProgress(Math.floor(verifyProgress), 
+                                `Verifying uploads... ${completedFiles}/${totalFiles} files complete`);
+                            lastProgress = verifyProgress;
+                        }
+                        
+                        // Wait before checking again
+                        await new Promise(resolve => setTimeout(resolve, 200));
+                    }
+                } catch (error) {
+                    console.warn('Progress check failed:', error);
+                    // Continue monitoring even if one check fails
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
             }
         }
         

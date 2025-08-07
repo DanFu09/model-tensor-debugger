@@ -3,18 +3,22 @@ import zipfile
 import tarfile
 import tempfile
 import shutil
-from flask import Flask, request, render_template, jsonify
+from flask import Flask, request, render_template, jsonify, session
 import torch
 import numpy as np
 import json
 from pathlib import Path
 import plotly.graph_objs as go
 import plotly.utils
+import uuid
+import threading
+import time
 
 # Configure Flask to work with Vercel's directory structure
 template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
 app = Flask(__name__, template_folder=template_dir)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
 
 def extract_archive(file_path, extract_to):
     """Extract zip or tar.gz files"""
@@ -1186,6 +1190,283 @@ def store_matches_for_inspection(matches):
 
 # Global storage for tensor data (in production, use proper session management)
 stored_matches = []
+
+# Chunked upload tracking
+upload_sessions = {}
+upload_progress = {}
+
+class UploadSession:
+    def __init__(self, session_id, total_chunks):
+        self.session_id = session_id
+        self.total_chunks = total_chunks
+        self.received_chunks = {}
+        self.completed_chunks = 0
+        self.temp_dir = tempfile.mkdtemp()
+        self.created_at = time.time()
+        
+    def add_chunk(self, chunk_index, data):
+        self.received_chunks[chunk_index] = data
+        self.completed_chunks = len(self.received_chunks)
+        
+    def is_complete(self):
+        return self.completed_chunks == self.total_chunks
+        
+    def get_progress(self):
+        return (self.completed_chunks / self.total_chunks) * 100 if self.total_chunks > 0 else 0
+        
+    def assemble_file(self, filename):
+        """Assemble chunks into complete file"""
+        file_path = os.path.join(self.temp_dir, filename)
+        with open(file_path, 'wb') as f:
+            for i in range(self.total_chunks):
+                if i in self.received_chunks:
+                    f.write(self.received_chunks[i])
+        return file_path
+        
+    def cleanup(self):
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+@app.route('/start_chunked_upload', methods=['POST'])
+def start_chunked_upload():
+    """Initialize a chunked upload session"""
+    data = request.json
+    total_chunks = data.get('total_chunks')
+    file_names = data.get('file_names', [])
+    
+    if not total_chunks or not file_names:
+        return jsonify({'error': 'total_chunks and file_names required'}), 400
+    
+    session_id = str(uuid.uuid4())
+    upload_sessions[session_id] = {}
+    
+    for file_name in file_names:
+        upload_sessions[session_id][file_name] = UploadSession(session_id, total_chunks)
+    
+    return jsonify({
+        'session_id': session_id,
+        'message': f'Upload session created for {len(file_names)} files with {total_chunks} chunks each'
+    })
+
+@app.route('/upload_chunk', methods=['POST'])
+def upload_chunk():
+    """Upload a single chunk"""
+    session_id = request.form.get('session_id')
+    file_name = request.form.get('file_name')
+    chunk_index = int(request.form.get('chunk_index'))
+    chunk_file = request.files.get('chunk')
+    
+    if not all([session_id, file_name, chunk_file]):
+        return jsonify({'error': 'session_id, file_name, and chunk required'}), 400
+    
+    if session_id not in upload_sessions:
+        return jsonify({'error': 'Invalid session_id'}), 400
+        
+    if file_name not in upload_sessions[session_id]:
+        return jsonify({'error': 'Invalid file_name for session'}), 400
+    
+    session = upload_sessions[session_id][file_name]
+    chunk_data = chunk_file.read()
+    session.add_chunk(chunk_index, chunk_data)
+    
+    return jsonify({
+        'chunk_received': chunk_index,
+        'progress': session.get_progress(),
+        'completed': session.is_complete()
+    })
+
+@app.route('/get_upload_progress/<session_id>')
+def get_upload_progress(session_id):
+    """Get upload progress for session"""
+    if session_id not in upload_sessions:
+        return jsonify({'error': 'Invalid session_id'}), 400
+    
+    session_files = upload_sessions[session_id]
+    progress_data = {}
+    
+    for file_name, session in session_files.items():
+        progress_data[file_name] = {
+            'progress': session.get_progress(),
+            'completed': session.is_complete(),
+            'chunks_received': session.completed_chunks,
+            'total_chunks': session.total_chunks
+        }
+    
+    return jsonify(progress_data)
+
+@app.route('/complete_chunked_upload', methods=['POST'])
+def complete_chunked_upload():
+    """Complete chunked upload and process files"""
+    data = request.json
+    session_id = data.get('session_id')
+    upload_mode = data.get('upload_mode', 'dual_archive')
+    
+    if session_id not in upload_sessions:
+        return jsonify({'error': 'Invalid session_id'}), 400
+    
+    session_files = upload_sessions[session_id]
+    
+    # Check all files are complete
+    for file_name, session in session_files.items():
+        if not session.is_complete():
+            return jsonify({'error': f'File {file_name} not fully uploaded'}), 400
+    
+    try:
+        # Assemble files from chunks
+        assembled_files = {}
+        temp_dir = None
+        
+        for file_name, session in session_files.items():
+            assembled_files[file_name] = session.assemble_file(file_name)
+            if temp_dir is None:
+                temp_dir = session.temp_dir
+        
+        # Process based on upload mode
+        if upload_mode == 'dual_archive':
+            result = process_dual_archives(assembled_files, temp_dir)
+        elif upload_mode == 'dual_pth':
+            result = process_dual_pth_files(assembled_files, temp_dir)
+        elif upload_mode == 'single_file':
+            result = process_single_file(assembled_files, temp_dir)
+        else:
+            return jsonify({'error': 'Invalid upload_mode'}), 400
+        
+        # Clean up upload session
+        for session in session_files.values():
+            session.cleanup()
+        del upload_sessions[session_id]
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        # Clean up on error
+        for session in session_files.values():
+            session.cleanup()
+        if session_id in upload_sessions:
+            del upload_sessions[session_id]
+            
+        print(f"ERROR in complete_chunked_upload: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        return jsonify({
+            'error': f'Upload processing failed: {str(e)}',
+            'details': 'Check server logs for more information'
+        }), 500
+
+def process_dual_archives(assembled_files, temp_dir):
+    """Process dual archive files from chunked upload"""
+    file_list = list(assembled_files.items())
+    if len(file_list) != 2:
+        raise ValueError("Dual archive mode requires exactly 2 files")
+    
+    model1_path = file_list[0][1]
+    model2_path = file_list[1][1]
+    
+    # Create extraction directories
+    model1_dir = os.path.join(temp_dir, 'model1')
+    model2_dir = os.path.join(temp_dir, 'model2')
+    os.makedirs(model1_dir, exist_ok=True)
+    os.makedirs(model2_dir, exist_ok=True)
+    
+    # Extract archives
+    extract_archive(model1_path, model1_dir)
+    extract_archive(model2_path, model2_dir)
+    
+    # Load and process tensor data
+    model1_data = load_tensor_files(model1_dir)
+    model2_data = load_tensor_files(model2_dir)
+    
+    matches = match_tensors(model1_data, model2_data, strategy='auto', upload_mode='dual_archive')
+    
+    global stored_matches
+    stored_matches = store_matches_for_inspection(matches)
+    
+    return {
+        'model1_files': len(model1_data),
+        'model2_files': len(model2_data),
+        'matches': [serialize_match_for_response(match) for match in matches],
+        'upload_mode': 'dual_archive'
+    }
+
+def process_dual_pth_files(assembled_files, temp_dir):
+    """Process dual .pth files from chunked upload"""
+    file_list = list(assembled_files.items())
+    if len(file_list) != 2:
+        raise ValueError("Dual .pth mode requires exactly 2 files")
+    
+    model1_path = file_list[0][1]
+    model2_path = file_list[1][1]
+    
+    # Load tensor data directly
+    model1_data = {}
+    model2_data = {}
+    
+    # Load first file
+    data1 = torch.load(model1_path, map_location='cpu')
+    if isinstance(data1, dict):
+        for key, tensor in data1.items():
+            model1_data[f"file1:{key}"] = process_single_tensor(tensor, key)
+    else:
+        model1_data["file1"] = process_single_tensor(data1, 'tensor')
+    
+    # Load second file
+    data2 = torch.load(model2_path, map_location='cpu')
+    if isinstance(data2, dict):
+        for key, tensor in data2.items():
+            model2_data[f"file2:{key}"] = process_single_tensor(tensor, key)
+    else:
+        model2_data["file2"] = process_single_tensor(data2, 'tensor')
+    
+    # Match tensors
+    matches = match_tensors(model1_data, model2_data, strategy='dual_pth', upload_mode='dual_pth')
+    
+    global stored_matches
+    stored_matches = store_matches_for_inspection(matches)
+    
+    return {
+        'model1_files': len(model1_data),
+        'model2_files': len(model2_data),
+        'matches': [serialize_match_for_response(match) for match in matches],
+        'upload_mode': 'dual_pth'
+    }
+
+def process_single_file(assembled_files, temp_dir):
+    """Process single file from chunked upload"""
+    if len(assembled_files) != 1:
+        raise ValueError("Single file mode requires exactly 1 file")
+    
+    file_path = list(assembled_files.values())[0]
+    
+    # Load tensor data
+    tensor_data = {}
+    data = torch.load(file_path, map_location='cpu')
+    
+    if isinstance(data, dict):
+        if len(data) == 0:
+            raise ValueError('Tensor file contains empty dictionary')
+        for key, tensor in data.items():
+            tensor_data[key] = process_single_tensor(tensor, key)
+    elif isinstance(data, (list, tuple)):
+        if len(data) == 0:
+            raise ValueError('Tensor file contains empty list/tuple')
+        for i, tensor in enumerate(data):
+            tensor_data[f'tensor_{i}'] = process_single_tensor(tensor, f'tensor_{i}')
+    else:
+        tensor_data['tensor_0'] = process_single_tensor(data, 'single_tensor')
+    
+    # Create self-comparison matches
+    matches = match_tensors(tensor_data, None, strategy='auto', upload_mode='single_file')
+    
+    global stored_matches
+    stored_matches = store_matches_for_inspection(matches)
+    
+    return {
+        'model1_files': len(tensor_data),
+        'model2_files': len(tensor_data),
+        'matches': [serialize_match_for_response(match) for match in matches],
+        'upload_mode': 'single_file'
+    }
 
 @app.route('/get_tensor_values', methods=['POST'])
 def get_tensor_values():
