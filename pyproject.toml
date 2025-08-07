@@ -1,3 +1,0 @@
-[build-system]
-requires = ["setuptools>=68.0.0"] # Or a version compatible with your project
-build-backend = "setuptools.build_meta"
