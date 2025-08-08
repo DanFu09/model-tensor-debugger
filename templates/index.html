@@ -1001,7 +1001,7 @@
             
             if (detectedMode === 'dual-archive' && file1 && file2) {
                 uploadBtn.disabled = false;
-                uploadBtn.textContent = 'Compare Models';
+                if (uploadBtn) uploadBtn.textContent = 'Compare Models';
             } else if (detectedMode === 'dual-pth' && file1 && file2) {
                 uploadBtn.disabled = false;
                 // Check if both are safetensors files
@@ -1009,15 +1009,15 @@
                 const bothPth = file1.name.match(/\.(pth|pt)$/i) && file2.name.match(/\.(pth|pt)$/i);
                 
                 if (bothSafetensors) {
-                    uploadBtn.textContent = 'Compare SafeTensors';
+                    if (uploadBtn) uploadBtn.textContent = 'Compare SafeTensors';
                 } else if (bothPth) {
-                    uploadBtn.textContent = 'Compare PyTorch Tensors';
+                    if (uploadBtn) uploadBtn.textContent = 'Compare PyTorch Tensors';
                 } else {
-                    uploadBtn.textContent = 'Compare Tensor Files';
+                    if (uploadBtn) uploadBtn.textContent = 'Compare Tensor Files';
                 }
             } else {
                 uploadBtn.disabled = true;
-                uploadBtn.textContent = 'Process Files';
+                if (uploadBtn) uploadBtn.textContent = 'Process Files';
             }
         }
         
@@ -1084,7 +1084,10 @@
             progressBar.setAttribute('data-percentage', Math.round(percent) + '%');
             
             if (text) {
-                document.getElementById('progress-text').textContent = text;
+                const progressTextElement = document.getElementById('progress-text');
+                if (progressTextElement) {
+                    progressTextElement.textContent = text;
+                }
             }
         }
         
@@ -1313,8 +1316,8 @@
                 model1Name = file1 ? file1.name : 'Model 1';
                 model2Name = file2 ? file2.name : 'Model 2';
             }
-            floatingModel1.textContent = model1Name;
-            floatingModel2.textContent = model2Name;
+            if (floatingModel1) floatingModel1.textContent = model1Name;
+            if (floatingModel2) floatingModel2.textContent = model2Name;
             floatingHeader.classList.add('visible');
             
             if (data.upload_mode === 'single_file') {
@@ -2146,7 +2149,7 @@
             const valueSpan = document.getElementById(`dim${dimensionIndex}-value-${matchIndex}`);
             
             if (slider && valueSpan) {
-                valueSpan.textContent = slider.value;
+                if (valueSpan) valueSpan.textContent = slider.value;
             }
         }
         
@@ -2190,7 +2193,7 @@
                 const slider = document.getElementById(`count-slider-${matchIndex}`);
                 const valueSpan = document.getElementById(`count-value-${matchIndex}`);
                 const input = document.getElementById(`count-input-${matchIndex}`);
-                valueSpan.textContent = slider.value;
+                if (valueSpan) valueSpan.textContent = slider.value;
                 input.value = slider.value;
             }
         }
@@ -2253,21 +2256,68 @@
                 // Initialize variables needed for display
                 const indexOffset = 0; // For tooltip indexing
                 
+                // Helper function to format tensor values for display
+                const formatTensorValue = (val) => {
+                    if (typeof val === 'string') {
+                        return val; // Return nan/inf strings as-is
+                    }
+                    if (typeof val === 'number') {
+                        return val.toFixed(6);
+                    }
+                    return String(val);
+                };
+
+                // Helper function to get numeric value for calculations
+                const getNumericValue = (val) => {
+                    if (typeof val === 'string') {
+                        if (val === 'nan') return NaN;
+                        if (val === 'inf') return Infinity;
+                        if (val === '-inf') return -Infinity;
+                        return parseFloat(val) || 0;
+                    }
+                    return val;
+                };
+
+                // Helper function to calculate difference between two values
+                const calculateDifference = (val1, val2) => {
+                    const num1 = getNumericValue(val1);
+                    const num2 = getNumericValue(val2);
+                    
+                    // Handle special cases
+                    if (isNaN(num1) || isNaN(num2)) return NaN;
+                    if (!isFinite(num1) || !isFinite(num2)) return Infinity;
+                    
+                    return Math.abs(num1 - num2);
+                };
+
                 // Define color functions for all cases
                 const getBackgroundColor = (value, allValues = null) => {
-                    const absValue = Math.abs(value);
+                    const numValue = getNumericValue(value);
+                    
+                    // Special handling for nan/inf values
+                    if (isNaN(numValue)) {
+                        return '#ffcccc'; // Light red for NaN
+                    }
+                    if (!isFinite(numValue)) {
+                        return '#ffffcc'; // Light yellow for inf/-inf
+                    }
+                    
+                    const absValue = Math.abs(numValue);
                     
                     // Calculate intensity based on magnitude if we have all values for context
                     let intensity = 0.5; // Default medium intensity
                     if (allValues && allValues.length > 0) {
-                        const maxAbs = Math.max(...allValues.map(v => Math.abs(v)));
-                        const minAbs = Math.min(...allValues.map(v => Math.abs(v)));
-                        if (maxAbs > minAbs) {
-                            intensity = (absValue - minAbs) / (maxAbs - minAbs);
+                        const numericValues = allValues.map(v => getNumericValue(v)).filter(v => isFinite(v) && !isNaN(v));
+                        if (numericValues.length > 0) {
+                            const maxAbs = Math.max(...numericValues.map(v => Math.abs(v)));
+                            const minAbs = Math.min(...numericValues.map(v => Math.abs(v)));
+                            if (maxAbs > minAbs) {
+                                intensity = (absValue - minAbs) / (maxAbs - minAbs);
+                            }
                         }
                     }
                     
-                    if (value < 0) {
+                    if (numValue < 0) {
                         // Blue gradient: light blue to medium blue based on magnitude
                         const red = Math.floor(173 - (173 - 100) * intensity);   // 173 (light blue) to 100 (medium blue)
                         const green = Math.floor(216 - (216 - 149) * intensity); // 216 (light blue) to 149 (medium blue)  
@@ -2301,9 +2351,10 @@
                 if (result.tensor1_values && result.tensor2_values) {
                     // Both models have data - calculate differences and color code
                     const differences = result.tensor1_values.map((val1, idx) => 
-                        Math.abs(val1 - result.tensor2_values[idx])
+                        calculateDifference(val1, result.tensor2_values[idx])
                     );
-                    const maxDiff = Math.max(...differences);
+                    const validDiffs = differences.filter(d => isFinite(d) && !isNaN(d));
+                    const maxDiff = validDiffs.length > 0 ? Math.max(...validDiffs) : 0;
                     const normalizationFactor = 0.5; // 0.5 difference = dark color
                     
                     // Store max difference for this tensor globally
@@ -2326,9 +2377,11 @@
                                         const diff = differences[idx];
                                         const bgColor = getBackgroundColor(val, result.tensor1_values);
                                         const borderColor = getBorderColor(diff, maxDiff);
+                                        const formattedVal = formatTensorValue(val);
+                                        const formattedDiff = isFinite(diff) && !isNaN(diff) ? diff.toFixed(6) : String(diff);
                                         return `<div class="value-cell" 
                                                 style="background-color: ${bgColor}; border: 2px solid ${borderColor};" 
-                                                title="Index: ${indexOffset + idx}, Value: ${val.toFixed(6)}, Diff: ${diff.toFixed(6)}">${val.toFixed(6)}</div>`;
+                                                title="Index: ${indexOffset + idx}, Value: ${formattedVal}, Diff: ${formattedDiff}">${formattedVal}</div>`;
                                     }).join('')}
                                 </div>
                             </div>
@@ -2339,9 +2392,11 @@
                                         const diff = differences[idx];
                                         const bgColor = getBackgroundColor(val, result.tensor2_values);
                                         const borderColor = getBorderColor(diff, maxDiff);
+                                        const formattedVal = formatTensorValue(val);
+                                        const formattedDiff = isFinite(diff) && !isNaN(diff) ? diff.toFixed(6) : String(diff);
                                         return `<div class="value-cell" 
                                                 style="background-color: ${bgColor}; border: 2px solid ${borderColor};" 
-                                                title="Index: ${indexOffset + idx}, Value: ${val.toFixed(6)}, Diff: ${diff.toFixed(6)}">${val.toFixed(6)}</div>`;
+                                                title="Index: ${indexOffset + idx}, Value: ${formattedVal}, Diff: ${formattedDiff}">${formattedVal}</div>`;
                                     }).join('')}
                                 </div>
                             </div>
@@ -2356,9 +2411,10 @@
                                 <div class="values-grid">
                                     ${result.tensor1_values.map((val, idx) => {
                                         const bgColor = getBackgroundColor(val, result.tensor1_values);
+                                        const formattedVal = formatTensorValue(val);
                                         return `<div class="value-cell" 
                                                 style="background-color: ${bgColor}; border: 2px solid #90EE90;" 
-                                                title="Index: ${indexOffset + idx}, Value: ${val.toFixed(6)}">${val.toFixed(6)}</div>`;
+                                                title="Index: ${indexOffset + idx}, Value: ${formattedVal}">${formattedVal}</div>`;
                                     }).join('')}
                                 </div>
                             </div>
@@ -2381,9 +2437,10 @@
                                 <div class="values-grid">
                                     ${result.tensor2_values.map((val, idx) => {
                                         const bgColor = getBackgroundColor(val, result.tensor2_values);
+                                        const formattedVal = formatTensorValue(val);
                                         return `<div class="value-cell" 
                                                 style="background-color: ${bgColor}; border: 2px solid #90EE90;" 
-                                                title="Index: ${indexOffset + idx}, Value: ${val.toFixed(6)}">${val.toFixed(6)}</div>`;
+                                                title="Index: ${indexOffset + idx}, Value: ${formattedVal}">${formattedVal}</div>`;
                                     }).join('')}
                                 </div>
                             </div>
@@ -2772,6 +2829,17 @@
         }
         
         function displayManualTensorValues(matchIndex, result) {
+            // Helper function to get numeric value for calculations
+            const getNumericValue = (val) => {
+                if (typeof val === 'string') {
+                    if (val === 'nan') return NaN;
+                    if (val === 'inf') return Infinity;
+                    if (val === '-inf') return -Infinity;
+                    return parseFloat(val) || 0;
+                }
+                return val;
+            };
+
             const displayDiv = document.getElementById(`tensor-display-${matchIndex}`);
             
             let html = '<div class="tensor-comparison">';
@@ -2896,9 +2964,24 @@
                     }
                     
                     if (result.tensor1_values && result.tensor2_values && val1 !== null && val2 !== null) {
-                        const diff = val1 - val2;
-                        const diffFormatted = Math.abs(diff) < 1e-10 ? '0.000000' : diff.toFixed(6);
-                        const diffColor = Math.abs(diff) > 1e-6 ? '#ffebee' : '#e8f5e8';
+                        const num1 = getNumericValue(val1);
+                        const num2 = getNumericValue(val2);
+                        
+                        let diffFormatted;
+                        let diffColor;
+                        
+                        if (isNaN(num1) || isNaN(num2)) {
+                            diffFormatted = 'N/A (NaN)';
+                            diffColor = '#ffcccc';
+                        } else if (!isFinite(num1) || !isFinite(num2)) {
+                            diffFormatted = 'N/A (Inf)';
+                            diffColor = '#ffffcc';
+                        } else {
+                            const diff = num1 - num2;
+                            diffFormatted = Math.abs(diff) < 1e-10 ? '0.000000' : diff.toFixed(6);
+                            diffColor = Math.abs(diff) > 1e-6 ? '#ffebee' : '#e8f5e8';
+                        }
+                        
                         html += `<td style="border: 1px solid #ccc; padding: 8px; background-color: ${diffColor};">${diffFormatted}</td>`;
                     }
                     
@@ -3166,16 +3249,16 @@
             
             // Update button text and show mode info
             if (detectedMode === 'dual_archive') {
-                uploadBtn.textContent = 'Compare Model Archives';
+                if (uploadBtn) uploadBtn.textContent = 'Compare Model Archives';
             } else if (detectedMode === 'dual_pth') {
-                uploadBtn.textContent = 'Compare Tensor Files';
+                if (uploadBtn) uploadBtn.textContent = 'Compare Tensor Files';
             } else if (detectedMode === 'mixed') {
-                uploadBtn.textContent = 'Incompatible File Types';
+                if (uploadBtn) uploadBtn.textContent = 'Incompatible File Types';
                 uploadBtn.disabled = true;
             } else if (file1 || file2) {
-                uploadBtn.textContent = 'Upload Both Files';
+                if (uploadBtn) uploadBtn.textContent = 'Upload Both Files';
             } else {
-                uploadBtn.textContent = 'Upload Files to Compare';
+                if (uploadBtn) uploadBtn.textContent = 'Upload Files to Compare';
             }
         }
         

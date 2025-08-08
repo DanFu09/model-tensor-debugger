@@ -1038,11 +1038,11 @@ def sanitize_for_json(tensor_values):
             return [clean_value(v) for v in val]
         elif isinstance(val, float):
             if val != val:  # NaN check
-                return 0.0
+                return "nan"
             elif val == float('inf'):
-                return 1e10  # Large but finite number
+                return "inf"
             elif val == float('-inf'):
-                return -1e10
+                return "-inf"
             else:
                 return val
         else:
